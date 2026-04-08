@@ -1,0 +1,81 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --navy-900: #0D1B2A;
+  --navy-800: #1A2F4E;
+  --navy-700: #1E3A5F;
+  --mint-500: #00C9A7;
+  --mint-400: #33D4B7;
+  --mint-100: #E0FAF5;
+  --white: #FFFFFF;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  background: #F4FAFA;
+  color: var(--navy-900);
+}
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: #f1f1f1; }
+::-webkit-scrollbar-thumb { background: var(--mint-500); border-radius: 3px; }
+
+/* Salary badge */
+.badge-high     { background: #D1FAE5; color: #065F46; }
+.badge-estimated{ background: #FEF3C7; color: #92400E; }
+.badge-unknown  { background: #F3F4F6; color: #6B7280; }
+
+/* Source badge */
+.badge-adzuna       { background: #DBEAFE; color: #1E40AF; }
+.badge-ziprecruiter { background: #EDE9FE; color: #5B21B6; }
+.badge-usajobs      { background: #FEE2E2; color: #991B1B; }
+
+/* Card hover */
+.job-card {
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+.job-card:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 12px 32px rgba(0, 201, 167, 0.15);
+}
+
+/* Upload zone */
+.upload-zone {
+  border: 2px dashed var(--mint-500);
+  transition: all 0.2s ease;
+}
+.upload-zone:hover, .upload-zone.drag-over {
+  background: var(--mint-100);
+  border-color: var(--mint-400);
+}
+
+/* Progress bar */
+.match-bar {
+  height: 6px;
+  border-radius: 3px;
+  background: #E5E7EB;
+  overflow: hidden;
+}
+.match-bar-fill {
+  height: 100%;
+  border-radius: 3px;
+  background: linear-gradient(90deg, var(--mint-500), var(--mint-400));
+  transition: width 0.6s ease;
+}
+
+/* Pulse animation for loading */
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+.animate-pulse { animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite; }
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+.animate-spin { animation: spin 1s linear infinite; }
