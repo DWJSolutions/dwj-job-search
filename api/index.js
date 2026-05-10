@@ -11,9 +11,6 @@ const healthRouter  = require('./routes/health');
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-// ─── Database ─────────────────────────────────────────────────────────────────
-app.locals.db = getDb();
-
 // ─── Middleware ────────────────────────────────────────────────────────────────
 app.use(cors({ origin: process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3000' }));
 app.use(express.json({ limit: '10mb' }));
@@ -29,8 +26,17 @@ app.use((err, req, res, next) => {
   res.status(err.status || 500).json({ error: err.message || 'Internal server error' });
 });
 
-app.listen(PORT, () => {
-  console.log(`DWJ API Server running on port ${PORT}`);
+async function start() {
+  app.locals.db = await getDb();
+
+  app.listen(PORT, () => {
+    console.log(`DWJ API Server running on port ${PORT}`);
+  });
+}
+
+start().catch((err) => {
+  console.error('Failed to start DWJ API Server:', err);
+  process.exit(1);
 });
 
 module.exports = app;

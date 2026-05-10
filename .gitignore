@@ -1,0 +1,31 @@
+.env
+.env.*
+!.env.example
+
+# Node dependencies and build output
+frontend/node_modules/
+api/node_modules/
+frontend/.next/
+frontend/out/
+
+# Python
+ai/.venv/
+ai/__pycache__/
+ai/*.pyc
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# OS and editor files
+.DS_Store
+._*
+.idea/
+.vscode/
+
+# Local database or generated artifacts
+*.sqlite
+*.sqlite3
+*.db
