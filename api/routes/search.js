@@ -1,14 +1,13 @@
 const router     = require('express').Router();
 const fetch      = require('node-fetch');
 const { v4: uuid } = require('uuid');
-const fetchAdzuna       = require('../services/adzuna');
-const fetchZipRecruiter = require('../services/ziprecruiter');
-const fetchUSAJOBS      = require('../services/usajobs');
-const fetchTheMuse      = require('../services/themuse');
-const fetchCareerJet    = require('../services/careerjet');
-const { normalize }     = require('../services/normalizer');
-const { deduplicate }   = require('../services/deduplicator');
-const { geocodeZip }    = require('../services/geocoder');
+const fetchAdzuna    = require('../services/adzuna');
+const fetchUSAJOBS   = require('../services/usajobs');
+const fetchTheMuse   = require('../services/themuse');
+const fetchCareerJet = require('../services/careerjet');
+const { normalize }  = require('../services/normalizer');
+const { deduplicate } = require('../services/deduplicator');
+const { geocodeZip }  = require('../services/geocoder');
 
 // POST /api/search
 router.post('/search', async (req, res, next) => {
@@ -26,16 +25,15 @@ router.post('/search', async (req, res, next) => {
     const queries = [...(profile.titles || []), ...(profile.skills || []).slice(0, 3)];
     const primaryQuery = profile.titles?.[0] || queries[0] || 'analyst';
 
-    // 3. Parallel fetch from all 5 sources
-    const [adzunaRes, zipRes, usaRes, museRes, careerjetRes] = await Promise.allSettled([
+    // 3. Parallel fetch from all 4 sources
+    const [adzunaRes, usaRes, museRes, careerjetRes] = await Promise.allSettled([
       fetchAdzuna(primaryQuery, location),
-      fetchZipRecruiter(primaryQuery, zip_code),
       fetchUSAJOBS(primaryQuery, location),
       fetchTheMuse(primaryQuery, location),
       fetchCareerJet(primaryQuery, location),
     ]);
 
-    const raw = [adzunaRes, zipRes, usaRes, museRes, careerjetRes]
+    const raw = [adzunaRes, usaRes, museRes, careerjetRes]
       .filter(r => r.status === 'fulfilled')
       .flatMap(r => r.value);
 
@@ -44,6 +42,10 @@ router.post('/search', async (req, res, next) => {
 
     // 5. Deduplicate
     const unique = deduplicate(normalized);
+
+    if (unique.length === 0) {
+      return res.status(200).json({ search_id: null, count: 0, message: 'No jobs found from any source' });
+    }
 
     // 6. Send to Python AI for salary estimation, gap analysis & ranking
     const aiRes = await fetch(`${process.env.PYTHON_SERVICE_URL}/rank-jobs`, {
