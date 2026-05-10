@@ -12,7 +12,18 @@ const app = express();
 const PORT = process.env.PORT || 3001;
 
 // ─── Middleware ────────────────────────────────────────────────────────────────
-app.use(cors({ origin: process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3000' }));
+// Allow multiple origins: comma-separated CORS_ORIGINS env var, or defaults
+const allowedOrigins = (process.env.CORS_ORIGINS || 'https://dwj-job-search.vercel.app,http://localhost:3000')
+  .split(',').map(o => o.trim());
+app.use(cors({
+  origin: (origin, cb) => {
+    // Allow requests with no origin (curl, mobile apps, server-to-server)
+    if (!origin) return cb(null, true);
+    if (allowedOrigins.includes(origin)) return cb(null, true);
+    cb(new Error(`CORS blocked: ${origin}`));
+  },
+  credentials: true,
+}));
 app.use(express.json({ limit: '10mb' }));
 
 // ─── Routes ───────────────────────────────────────────────────────────────────
