@@ -42,6 +42,34 @@ async function insertSearchSession(db, searchId, zipCode, profile) {
   }
 }
 
+async function upsertJobCache(db, job) {
+  const result = await db.query(
+    `INSERT INTO job_cache
+      (id, source, external_id, title, company, location, lat, lng,
+       salary_min, salary_max, salary_est, salary_conf, description, url, posted_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+     ON CONFLICT (source, external_id) DO UPDATE SET
+       title = EXCLUDED.title,
+       company = EXCLUDED.company,
+       location = EXCLUDED.location,
+       lat = EXCLUDED.lat,
+       lng = EXCLUDED.lng,
+       salary_min = EXCLUDED.salary_min,
+       salary_max = EXCLUDED.salary_max,
+       salary_est = EXCLUDED.salary_est,
+       salary_conf = EXCLUDED.salary_conf,
+       description = EXCLUDED.description,
+       url = EXCLUDED.url,
+       posted_at = EXCLUDED.posted_at
+     RETURNING id`,
+    [job.id, job.source, job.external_id, job.title, job.company, job.location,
+     job.lat, job.lng, job.salary_min, job.salary_max, job.salary_est,
+     job.salary_confidence, job.description, job.url, job.posted_at]
+  );
+
+  return result.rows[0].id;
+}
+
 // POST /api/search
 router.post('/search', async (req, res, next) => {
   try {
@@ -114,20 +142,12 @@ router.post('/search', async (req, res, next) => {
 
     // Cache jobs
     for (const job of top30) {
-      await db.query(
-        `INSERT INTO job_cache
-          (id, source, external_id, title, company, location, lat, lng,
-           salary_min, salary_max, salary_est, salary_conf, description, url, posted_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
-         ON CONFLICT (source, external_id) DO NOTHING`,
-        [job.id, job.source, job.external_id, job.title, job.company, job.location,
-         job.lat, job.lng, job.salary_min, job.salary_max, job.salary_est,
-         job.salary_confidence, job.description, job.url, job.posted_at]
-      );
+      const cachedJobId = await upsertJobCache(db, job);
+
       await db.query(
         `INSERT INTO search_results (search_id, job_id, rank, match_score)
          VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING`,
-        [search_id, job.id, job.rank, job.match_score]
+        [search_id, cachedJobId, job.rank, job.match_score]
       );
     }
 
