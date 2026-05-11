@@ -33,6 +33,33 @@ export default function Home() {
     return true;
   };
 
+  const formatSearchError = (data, fallback) => {
+    if (!data || typeof data !== 'object') return fallback;
+    const details = typeof data.details === 'string' ? data.details.trim() : '';
+    const detail = typeof data.detail === 'string' ? data.detail.trim() : '';
+    const message = [data.error, details || detail].filter(Boolean).join(': ');
+    return message || fallback;
+  };
+
+  const postSearch = async (endpoint, body) => {
+    const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/${endpoint}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const text = await res.text();
+    let data = {};
+    try { data = text ? JSON.parse(text) : {}; } catch (_) {}
+    if (!res.ok) {
+      const missingRoute = res.status === 404 && /Cannot POST/i.test(text || '');
+      const error = new Error(formatSearchError(data, 'Search failed'));
+      error.status = res.status;
+      error.missingRoute = missingRoute;
+      throw error;
+    }
+    return data;
+  };
+
   const handleSearch = async (e) => {
     e.preventDefault();
     if (mode === 'resume' && !parsed) { setError('Please upload your resume first.'); return; }
@@ -56,13 +83,24 @@ export default function Home() {
       const body = mode === 'jobTitle'
         ? { job_title: jobTitle, zip_code: zip, include_remote: includeRemote }
         : { profile: parsed, zip_code: zip, include_remote: includeRemote };
-      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/${endpoint}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || 'Search failed');
+      let data;
+      try {
+        data = await postSearch(endpoint, body);
+      } catch (err) {
+        if (mode !== 'jobTitle' || !err.missingRoute) throw err;
+        data = await postSearch('search', {
+          profile: {
+            titles: [jobTitle],
+            skills: jobTitle.split(/\s+/).filter(Boolean),
+            experience_years: 0,
+            education: '',
+            industries: [],
+            search_query: jobTitle,
+          },
+          zip_code: zip,
+          include_remote: includeRemote,
+        });
+      }
       if (!data.search_id) throw new Error(data.message || 'No jobs found for this search.');
       const { search_id } = data;
       router.push(`/results?sid=${search_id}`);

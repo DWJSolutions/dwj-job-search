@@ -87,16 +87,19 @@ async def rank_jobs_endpoint(req: RankRequest):
             include_remote=req.include_remote,
         )
 
-        # Gap analysis on top 5 only (each is one GPT call - keeps search responsive)
-        for job in ranked[:5]:
-            try:
-                gaps = analyze_gaps(req.profile, job)
-                job["gap_skills"]     = gaps.get("gap_skills", [])
-                job["matched_skills"] = gaps.get("matched_skills", [])
-                job["gap_summary"]    = gaps.get("gap_summary", "")
-            except Exception as e:
-                print(f"[main] gap analysis failed for '{job.get('title')}': {e}")
-                job["gap_skills"] = []
+        # Gap analysis uses GPT calls, so only run it when we have real resume
+        # text. Job-title-only searches should return quickly without spending
+        # AI calls on synthetic profile data.
+        if req.profile.get("resume_text"):
+            for job in ranked[:5]:
+                try:
+                    gaps = analyze_gaps(req.profile, job)
+                    job["gap_skills"]     = gaps.get("gap_skills", [])
+                    job["matched_skills"] = gaps.get("matched_skills", [])
+                    job["gap_summary"]    = gaps.get("gap_summary", "")
+                except Exception as e:
+                    print(f"[main] gap analysis failed for '{job.get('title')}': {e}")
+                    job["gap_skills"] = []
 
         return {"ranked": ranked[:30]}
     except Exception as e:
