@@ -1,18 +1,29 @@
-const router     = require('express').Router();
-const fetch      = require('node-fetch');
+const router = require('express').Router();
+const fetch = require('node-fetch');
 const { v4: uuid } = require('uuid');
-const fetchAdzuna    = require('../services/adzuna');
-const fetchUSAJOBS   = require('../services/usajobs');
-const fetchTheMuse   = require('../services/themuse');
-const fetchCareerJet = require('../services/careerjet');
-const { normalize }  = require('../services/normalizer');
+const fetchAdzuna     = require('../services/adzuna');
+const fetchUSAJOBS    = require('../services/usajobs');
+const fetchTheMuse    = require('../services/themuse');
+const fetchCareerJet  = require('../services/careerjet');
+const fetchRemotive   = require('../services/remotive');   // free, no key
+const fetchArbeitnow  = require('../services/arbeitnow');  // free, no key
+const { normalize }   = require('../services/normalizer');
 const { deduplicate } = require('../services/deduplicator');
 const { geocodeZip }  = require('../services/geocoder');
+
+// All active sources — name shown in UI source badge row
+const SOURCES = [
+  { name: 'adzuna',     label: 'Adzuna'    },
+  { name: 'usajobs',    label: 'USAJOBS'   },
+  { name: 'themuse',    label: 'The Muse'  },
+  { name: 'careerjet',  label: 'CareerJet' },
+  { name: 'remotive',   label: 'Remotive'  },
+  { name: 'arbeitnow',  label: 'Arbeitnow' },
+];
 
 function fetchWithTimeout(url, options, timeoutMs = 120000) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
-
   return fetch(url, { ...options, signal: controller.signal })
     .finally(() => clearTimeout(timeout));
 }
@@ -34,7 +45,6 @@ async function insertSearchSession(db, searchId, zipCode, profile) {
     );
   } catch (err) {
     if (err.code !== '42703' || !/resume_json/.test(err.message || '')) throw err;
-
     await db.query(
       `INSERT INTO searches (id, zip_code) VALUES ($1, $2)`,
       [searchId, zipCode]
@@ -49,24 +59,25 @@ async function upsertJobCache(db, job) {
        salary_min, salary_max, salary_est, salary_conf, description, url, posted_at)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
      ON CONFLICT (source, external_id) DO UPDATE SET
-       title = EXCLUDED.title,
-       company = EXCLUDED.company,
-       location = EXCLUDED.location,
-       lat = EXCLUDED.lat,
-       lng = EXCLUDED.lng,
-       salary_min = EXCLUDED.salary_min,
-       salary_max = EXCLUDED.salary_max,
-       salary_est = EXCLUDED.salary_est,
-       salary_conf = EXCLUDED.salary_conf,
-       description = EXCLUDED.description,
-       url = EXCLUDED.url,
-       posted_at = EXCLUDED.posted_at
+       title        = EXCLUDED.title,
+       company      = EXCLUDED.company,
+       location     = EXCLUDED.location,
+       lat          = EXCLUDED.lat,
+       lng          = EXCLUDED.lng,
+       salary_min   = EXCLUDED.salary_min,
+       salary_max   = EXCLUDED.salary_max,
+       salary_est   = EXCLUDED.salary_est,
+       salary_conf  = EXCLUDED.salary_conf,
+       description  = EXCLUDED.description,
+       url          = EXCLUDED.url,
+       posted_at    = EXCLUDED.posted_at
      RETURNING id`,
-    [job.id, job.source, job.external_id, job.title, job.company, job.location,
-     job.lat, job.lng, job.salary_min, job.salary_max, job.salary_est,
-     job.salary_confidence, job.description, job.url, job.posted_at]
+    [
+      job.id, job.source, job.external_id, job.title, job.company, job.location,
+      job.lat, job.lng, job.salary_min, job.salary_max, job.salary_est,
+      job.salary_confidence, job.description, job.url, job.posted_at,
+    ]
   );
-
   return result.rows[0].id;
 }
 
@@ -85,33 +96,67 @@ router.post('/search', async (req, res, next) => {
     const { lat, lon, city, state } = await geocodeZip(zip_code);
     const location = `${city}, ${state}`;
 
-    // 2. Build search queries from resume
-    const queries = [...(profile.titles || []), ...(profile.skills || []).slice(0, 3)];
-    const primaryQuery = profile.titles?.[0] || queries[0] || 'analyst';
+    // 2. Build search query from resume
+    const primaryQuery = profile.titles?.[0] || profile.skills?.[0] || 'analyst';
 
-    // 3. Parallel fetch from all 4 sources
-    const [adzunaRes, usaRes, museRes, careerjetRes] = await Promise.allSettled([
-      withTimeout(fetchAdzuna(primaryQuery, location), 15000, 'Adzuna'),
-      withTimeout(fetchUSAJOBS(primaryQuery, location), 15000, 'USAJOBS'),
-      withTimeout(fetchTheMuse(primaryQuery, location), 15000, 'The Muse'),
+    // 3. Parallel fetch from all 6 sources
+    //    Remotive & Arbeitnow are global/remote boards — no location param needed.
+    //    The Python ranker handles distance scoring for remote jobs.
+    const [
+      adzunaRes,
+      usaRes,
+      museRes,
+      careerjetRes,
+      remotiveRes,
+      arbeitnowRes,
+    ] = await Promise.allSettled([
+      withTimeout(fetchAdzuna(primaryQuery, location),    15000, 'Adzuna'),
+      withTimeout(fetchUSAJOBS(primaryQuery, location),   15000, 'USAJOBS'),
+      withTimeout(fetchTheMuse(primaryQuery, location),   15000, 'The Muse'),
       withTimeout(fetchCareerJet(primaryQuery, location), 15000, 'CareerJet'),
+      withTimeout(fetchRemotive(primaryQuery),            15000, 'Remotive'),
+      withTimeout(fetchArbeitnow(primaryQuery),           15000, 'Arbeitnow'),
     ]);
 
-    const raw = [adzunaRes, usaRes, museRes, careerjetRes]
-      .filter(r => r.status === 'fulfilled')
-      .flatMap(r => r.value);
+    const settled = [
+      { label: 'adzuna',    result: adzunaRes    },
+      { label: 'usajobs',   result: usaRes       },
+      { label: 'themuse',   result: museRes      },
+      { label: 'careerjet', result: careerjetRes },
+      { label: 'remotive',  result: remotiveRes  },
+      { label: 'arbeitnow', result: arbeitnowRes },
+    ];
 
-    // 4. Normalize to common schema
+    // Log which sources succeeded/failed
+    const sourceStatus = {};
+    for (const { label, result } of settled) {
+      if (result.status === 'fulfilled') {
+        sourceStatus[label] = `ok (${result.value.length})`;
+      } else {
+        sourceStatus[label] = `error: ${result.reason?.message || 'unknown'}`;
+        console.warn(`[search] ${label} failed:`, result.reason?.message);
+      }
+    }
+    console.info('[search] source results:', sourceStatus);
+
+    const raw = settled
+      .filter(({ result }) => result.status === 'fulfilled')
+      .flatMap(({ result }) => result.value);
+
+    // 4. Normalize → deduplicate
     const normalized = raw.map(j => normalize(j));
-
-    // 5. Deduplicate
     const unique = deduplicate(normalized);
 
     if (unique.length === 0) {
-      return res.status(200).json({ search_id: null, count: 0, message: 'No jobs found from any source' });
+      return res.status(200).json({
+        search_id: null,
+        count: 0,
+        sources: sourceStatus,
+        message: 'No jobs found from any source',
+      });
     }
 
-    // 6. Send to Python AI for salary estimation, gap analysis & ranking
+    // 5. Send to Python AI for salary estimation, gap analysis & ranking
     const aiRes = await fetchWithTimeout(`${process.env.PYTHON_SERVICE_URL}/rank-jobs`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -135,15 +180,13 @@ router.post('/search', async (req, res, next) => {
     const { ranked } = await aiRes.json();
     const top30 = ranked.slice(0, 30);
 
-    // 7. Persist search session
+    // 6. Persist search session + cache jobs
     const search_id = uuid();
     const db = req.app.locals.db;
     await insertSearchSession(db, search_id, zip_code, profile);
 
-    // Cache jobs
     for (const job of top30) {
       const cachedJobId = await upsertJobCache(db, job);
-
       await db.query(
         `INSERT INTO search_results (search_id, job_id, rank, match_score)
          VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING`,
@@ -151,7 +194,11 @@ router.post('/search', async (req, res, next) => {
       );
     }
 
-    res.json({ search_id, count: top30.length });
+    res.json({
+      search_id,
+      count: top30.length,
+      sources: sourceStatus,
+    });
   } catch (err) {
     if (err.name === 'AbortError') {
       return res.status(504).json({
@@ -182,9 +229,10 @@ router.get('/results/:sid', async (req, res, next) => {
 
     res.json({
       meta: {
-        zip_code: searchRow.rows[0].zip_code,
+        zip_code:      searchRow.rows[0].zip_code,
         total_fetched: jobsResult.rows.length,
-        created_at: searchRow.rows[0].created_at,
+        created_at:    searchRow.rows[0].created_at,
+        sources:       SOURCES,
       },
       jobs: jobsResult.rows,
     });
