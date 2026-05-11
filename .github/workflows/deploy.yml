@@ -56,7 +56,6 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Deploy to Vercel
-        working-directory: frontend
         env:
           VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
           VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
@@ -70,7 +69,9 @@ jobs:
     steps:
       - name: Trigger Render deploy (API)
         run: |
-          curl -s -X POST "${{ secrets.RENDER_API_DEPLOY_HOOK }}"             -H "Content-Type: application/json"             --fail-with-body || echo "Render hook not configured — skipping"
+          curl -s -X POST "${{ secrets.RENDER_API_DEPLOY_HOOK }}" \
+            -H "Content-Type: application/json" \
+            --fail-with-body || echo "Render hook not configured — skipping"
 
   deploy-ai:
     name: Trigger AI Service Deploy → Render
@@ -80,4 +81,6 @@ jobs:
     steps:
       - name: Trigger Render deploy (AI)
         run: |
-          curl -s -X POST "${{ secrets.RENDER_AI_DEPLOY_HOOK }}"             -H "Content-Type: application/json"             --fail-with-body || echo "Render AI hook not configured — skipping"
+          curl -s -X POST "${{ secrets.RENDER_AI_DEPLOY_HOOK }}" \
+            -H "Content-Type: application/json" \
+            --fail-with-body || echo "Render AI hook not configured — skipping"
