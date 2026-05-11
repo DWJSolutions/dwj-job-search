@@ -17,10 +17,30 @@ const CONF_COLORS = {
 };
 
 const BADGE_STYLES = {
-  'apply-now': { bg: '#00C9A7', color: '#0D1B2A', label: '\u26a1 Apply Now' },
-  strong: { bg: '#3B82F6', color: '#FFFFFF', label: '\ud83d\udcaa Strong' },
-  stretch: { bg: '#F59E0B', color: '#FFFFFF', label: '\ud83c\udfaf Stretch' },
-  'long-term': { bg: '#6B7280', color: '#FFFFFF', label: '\ud83d\udcc5 Long-term' },
+  'apply-now': {
+    bg: '#00C9A7',
+    color: '#0D1B2A',
+    label: 'Apply Now',
+    desc: 'Excellent overall fit — you meet most requirements and the data is reliable.',
+  },
+  strong: {
+    bg: '#3B82F6',
+    color: '#FFFFFF',
+    label: 'Strong Candidate',
+    desc: 'Good fit — minor gaps, worth applying with a tailored cover letter.',
+  },
+  stretch: {
+    bg: '#F59E0B',
+    color: '#FFFFFF',
+    label: 'Stretch',
+    desc: "Partial fit — you'd be reaching, but it's possible with the right pitch.",
+  },
+  'long-term': {
+    bg: '#6B7280',
+    color: '#FFFFFF',
+    label: 'Long-term Target',
+    desc: 'Aspirational — meaningful gaps to close before this is realistic.',
+  },
 };
 
 const LEVEL_STYLES = {
@@ -113,7 +133,11 @@ export default function JobCard({ job, rank }) {
 
         <div className="flex flex-wrap items-center gap-2 mt-3">
           {badge && (
-            <span className="px-2 py-0.5 rounded-full text-xs font-bold" style={{ background: badge.bg, color: badge.color }}>
+            <span
+              className="px-2 py-0.5 rounded-full text-xs font-bold"
+              style={{ background: badge.bg, color: badge.color }}
+              title={badge.desc}
+            >
               {badge.label}
             </span>
           )}
@@ -166,6 +190,7 @@ export default function JobCard({ job, rank }) {
           <div className="match-bar">
             <div className="match-bar-fill" style={{ width: `${job.match_score || 0}%` }} />
           </div>
+          {badge?.desc && <p className="text-xs text-gray-500 mt-2">{badge.desc}</p>}
           {job.reason && <p className="text-xs text-gray-500 mt-2 italic">"{job.reason}"</p>}
         </div>
       </div>

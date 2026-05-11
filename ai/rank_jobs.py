@@ -1,6 +1,6 @@
 """
 Job Ranking Engine - Phase 2
-Composite score: salary (40%) + semantic match (40%) + growth (20%)
+Composite match score: salary signal (15%) + resume/job match (70%) + growth signal (15%)
 
 New in Phase 2:
   - match_score  -> OpenAI embedding cosine similarity (replaces Jaccard)
@@ -85,6 +85,15 @@ def _badge(match_score: int) -> str:
     return "long-term"
 
 
+def _badge_rank(badge: str) -> int:
+    return {
+        "apply-now": 1,
+        "strong": 2,
+        "stretch": 3,
+        "long-term": 4,
+    }.get(badge, 5)
+
+
 def _is_remote_or_hybrid(job: dict) -> bool:
     text = " ".join([
         job.get("location") or "",
@@ -155,25 +164,28 @@ def rank_jobs(jobs: list, profile: dict, user_lat: float, user_lon: float,
         job["growth_signal"] = growth_sig
 
         if sem_score > 0:
-            job["match_score"] = sem_score
+            resume_match_sig = sem_score
         else:
-            job["match_score"] = round(skills_sig * 0.7 + title_sig * 0.3)
+            resume_match_sig = round(skills_sig * 0.7 + title_sig * 0.3)
+
+        job["resume_match_signal"] = resume_match_sig
+        job["match_score"] = round(
+            salary_sig * 0.15 +
+            resume_match_sig * 0.70 +
+            growth_sig * 0.15
+        )
 
         job["badge"] = _badge(job["match_score"])
-
-        job["job_score"] = (
-            sal_norm              * 0.40 +
-            (job["match_score"] / 100) * 0.40 +
-            (growth_sig / 100)   * 0.20
-        )
+        job["tier_rank"] = _badge_rank(job["badge"])
+        job["job_score"] = job["match_score"] / 100
 
         top_skills = [s for s in (profile.get("skills") or [])
                       if s.lower() in (job.get("description") or "").lower()]
         job["reason"] = (f"Strong match on {', '.join(top_skills[:3])}"
                          if top_skills else "Good title alignment")
 
-    # 5. Sort by composite score
-    routed.sort(key=lambda j: j["job_score"], reverse=True)
+    # 5. Sort by fit tier first, then weighted match score
+    routed.sort(key=lambda j: (j.get("tier_rank", 5), -(j.get("job_score") or 0)))
 
     # 6. Assign ranks
     for i, job in enumerate(routed):

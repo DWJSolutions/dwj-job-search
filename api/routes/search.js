@@ -86,6 +86,8 @@ function collectAiData(job) {
     gap_summary: job.gap_summary || '',
     reason: job.reason || '',
     salary_confidence: job.salary_confidence || job.salary_conf || 'unknown',
+    resume_match_signal: job.resume_match_signal ?? null,
+    tier_rank: job.tier_rank ?? null,
   };
 }
 

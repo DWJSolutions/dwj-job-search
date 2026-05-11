@@ -70,7 +70,7 @@ export default function Results() {
         </div>
         <div className="text-center">
           <p className="text-white font-bold text-xl">Searching job sources...</p>
-          <p className="text-gray-400 mt-2">Ranking by salary, match score & growth potential</p>
+          <p className="text-gray-400 mt-2">Ranking by fit tier, match score, salary, and growth</p>
         </div>
         <div className="flex gap-6 mt-4">
           {['Adzuna', 'ZipRecruiter', 'USA Jobs', 'The Muse', 'CareerJet'].map(s => (
@@ -129,7 +129,7 @@ export default function Results() {
                   color: sortBy === s ? '#0D1B2A' : '#9CA3AF',
                 }}
               >
-                {s === 'rank' ? '🏆 Top Score' : s === 'salary' ? '💰 Salary' : s === 'recent' ? '🗓 Recent' : '🎯 Match'}
+                {s === 'rank' ? 'Top 30 Fit' : s === 'salary' ? 'Salary' : s === 'recent' ? 'Recent' : 'Match'}
               </button>
             ))}
           </div>
