@@ -1,147 +1,182 @@
 """
-Job Ranking Engine
-Composite score: salary (50%) + match (30%) + growth (20%)
+Job Ranking Engine - Phase 2
+Composite score: salary (40%) + semantic match (40%) + growth (20%)
+
+New in Phase 2:
+  - match_score  -> OpenAI embedding cosine similarity (replaces Jaccard)
+  - signal bars  -> salary_signal, skills_signal, title_signal, growth_signal (0-100)
+  - ats_*        -> ats_score, ats_keywords, ats_missing (top 30 after sort)
+  - badge        -> apply-now | strong | stretch | long-term
 """
 
 import math
 from salary_est import resolve_salary
+from embeddings import compute_semantic_scores
+from ats_match import compute_ats_match
 
-# ─── Salary normalization (0 → 1 scale, cap at $250k) ─────────────────────────
 SALARY_CAP = 250_000
+
 
 def normalize_salary(amt: float) -> float:
     if not amt: return 0.0
     return min(amt / SALARY_CAP, 1.0)
 
 
-# ─── Location: haversine distance ─────────────────────────────────────────────
 def haversine(lat1, lon1, lat2, lon2) -> float:
-    R = 3958.8  # Earth radius in miles
+    R = 3958.8
     dlat = math.radians(lat2 - lat1)
     dlon = math.radians(lon2 - lon1)
-    a = math.sin(dlat/2)**2 + math.cos(math.radians(lat1)) \
-        * math.cos(math.radians(lat2)) * math.sin(dlon/2)**2
+    a = (math.sin(dlat / 2) ** 2
+         + math.cos(math.radians(lat1))
+         * math.cos(math.radians(lat2))
+         * math.sin(dlon / 2) ** 2)
     return R * 2 * math.asin(math.sqrt(max(a, 0)))
 
 
-# ─── Skill match (Jaccard similarity) ─────────────────────────────────────────
-def skill_match_score(profile_skills: list, description: str) -> float:
+def _skill_signal(profile_skills: list, description: str) -> int:
     if not profile_skills or not description:
-        return 0.3  # neutral fallback
+        return 30
     desc_lower = description.lower()
     matches = sum(1 for s in profile_skills if s.lower() in desc_lower)
-    total   = len(profile_skills)
-    return matches / total if total else 0.0
+    return round(matches / len(profile_skills) * 100)
 
 
-# ─── Title match ──────────────────────────────────────────────────────────────
-def title_match_score(profile_titles: list, job_title: str) -> float:
+def _title_signal(profile_titles: list, job_title: str) -> int:
     if not profile_titles or not job_title:
-        return 0.3
+        return 30
     job_words = set(job_title.lower().split())
     best = 0.0
     for t in profile_titles:
-        t_words  = set(t.lower().split())
-        overlap  = len(t_words & job_words) / max(len(t_words | job_words), 1)
+        t_words = set(t.lower().split())
+        overlap = len(t_words & job_words) / max(len(t_words | job_words), 1)
         best = max(best, overlap)
-    return best
+    return round(best * 100)
 
 
-# ─── Growth score (v1.0 heuristic) ────────────────────────────────────────────
-SENIOR_KEYWORDS = ["senior", "lead", "principal", "director", "vp", "manager",
-                    "head of", "chief", "staff"]
-JUNIOR_KEYWORDS = ["junior", "associate", "entry", "coordinator", "assistant", "intern"]
-
-def growth_score(job_title: str, company_rating: float = None) -> float:
-    title_lower = job_title.lower()
-    if any(k in title_lower for k in SENIOR_KEYWORDS):
-        title_score = 0.85
-    elif any(k in title_lower for k in JUNIOR_KEYWORDS):
-        title_score = 0.30
-    else:
-        title_score = 0.60  # mid-level default
-
-    if company_rating:
-        rep_score = (company_rating - 1.0) / 4.0  # normalize 1–5 → 0–1
-    else:
-        rep_score = 0.50  # neutral fallback
-
-    return (title_score * 0.6) + (rep_score * 0.4)
+SENIOR_KW = ["senior", "lead", "principal", "director", "vp", "manager",
+             "head of", "chief", "staff"]
+JUNIOR_KW = ["junior", "associate", "entry", "coordinator", "assistant", "intern"]
 
 
-# ─── Recency factor ────────────────────────────────────────────────────────────
-def recency_factor(posted_at: str) -> float:
-    from datetime import datetime, timezone
-    if not posted_at:
-        return 0.5
-    try:
-        posted = datetime.fromisoformat(posted_at.replace("Z", "+00:00"))
-        days   = (datetime.now(timezone.utc) - posted).days
-        return max(0.0, 1.0 - (days / 60))  # full score if today, 0 if 60+ days ago
-    except:
-        return 0.5
+def _growth_signal(job_title: str) -> int:
+    t = job_title.lower()
+    if any(k in t for k in SENIOR_KW): return 85
+    if any(k in t for k in JUNIOR_KW): return 30
+    return 60
 
 
-# ─── Route remote jobs ─────────────────────────────────────────────────────────
-def route_job(job: dict, user_lat: float, user_lon: float, include_remote: bool) -> dict | None:
+def _salary_signal(job_salary_est: float, profile: dict) -> int:
+    if not job_salary_est: return 40
+    exp_years = profile.get("experience_years", 2)
+    expected = min(50_000 + exp_years * 4_000, 180_000)
+    ratio = job_salary_est / expected
+    if ratio >= 1.10: return 100
+    if ratio >= 1.00: return 90
+    if ratio >= 0.90: return 75
+    if ratio >= 0.75: return 55
+    if ratio >= 0.60: return 35
+    return 20
+
+
+def _badge(match_score: int) -> str:
+    if match_score >= 85: return "apply-now"
+    if match_score >= 70: return "strong"
+    if match_score >= 55: return "stretch"
+    return "long-term"
+
+
+def _route_job(job: dict, user_lat: float, user_lon: float,
+               include_remote: bool):
     is_remote = "remote" in (job.get("location") or "").lower()
-
     if is_remote:
         if include_remote:
             job["distance_miles"] = None
-            job["loc_score"]      = 0.5
+            job["loc_score"] = 0.5
             return job
-        return None  # excluded when toggle is off
+        return None
 
     lat, lon = job.get("lat"), job.get("lng")
     if lat and lon:
         dist = haversine(user_lat, user_lon, lat, lon)
         if dist <= 30:
             job["distance_miles"] = round(dist, 1)
+            job["loc_score"] = 1.0 - (dist / 30)
             return job
-        return None  # outside 30-mile radius
+        return None
 
-    # No coordinates → include with neutral location score
     job["distance_miles"] = None
-    job["loc_score"]      = 0.5
+    job["loc_score"] = 0.5
     return job
 
 
-# ─── Main ranking function ────────────────────────────────────────────────────
 def rank_jobs(jobs: list, profile: dict, user_lat: float, user_lon: float,
               include_remote: bool = False) -> list:
-    # 1. Resolve salaries (two-path)
+
+    resume_text = profile.get("resume_text", "")
+
+    # 1. Resolve salaries
     jobs = [resolve_salary(j, profile) for j in jobs]
 
-    # 2. Filter by location / remote
-    routed = [j for j in (route_job(j, user_lat, user_lon, include_remote) for j in jobs) if j]
+    # 2. Filter by location
+    routed = [j for j in (_route_job(j, user_lat, user_lon, include_remote) for j in jobs) if j]
+    if not routed:
+        return []
 
-    # 3. Score each job
-    for job in routed:
-        salary = normalize_salary(job.get("salary_est") or 0)
-        match  = skill_match_score(profile.get("skills", []), job.get("description", ""))
-        title  = title_match_score(profile.get("titles", []), job.get("title", ""))
-        loc    = job.get("loc_score", 1.0 - min(job.get("distance_miles") or 15, 30) / 30)
-        growth = growth_score(job.get("title", ""))
+    # 3. Batch semantic embeddings (one API call for all jobs)
+    try:
+        semantic_scores = compute_semantic_scores(resume_text, routed)
+    except Exception as e:
+        print(f"[rank_jobs] embeddings failed, falling back: {e}")
+        semantic_scores = [0] * len(routed)
 
-        combined_match = (match * 0.7) + (title * 0.3)
-        job["match_score"] = round(combined_match * 100)
-        job["growth_score"] = round(growth * 100)
+    # 4. Score each job
+    for job, sem_score in zip(routed, semantic_scores):
+        sal_est  = job.get("salary_est") or 0
+        sal_norm = normalize_salary(sal_est)
+
+        skills_sig = _skill_signal(profile.get("skills", []), job.get("description", ""))
+        title_sig  = _title_signal(profile.get("titles", []), job.get("title", ""))
+        growth_sig = _growth_signal(job.get("title", ""))
+        salary_sig = _salary_signal(sal_est, profile)
+
+        job["salary_signal"] = salary_sig
+        job["skills_signal"] = skills_sig
+        job["title_signal"]  = title_sig
+        job["growth_signal"] = growth_sig
+
+        if sem_score > 0:
+            job["match_score"] = sem_score
+        else:
+            job["match_score"] = round(skills_sig * 0.7 + title_sig * 0.3)
+
+        job["badge"] = _badge(job["match_score"])
+
         job["job_score"] = (
-            (salary     * 0.50) +
-            (combined_match * 0.30) +
-            (growth     * 0.20)
+            sal_norm              * 0.40 +
+            (job["match_score"] / 100) * 0.40 +
+            (growth_sig / 100)   * 0.20
         )
 
-        # Human-readable match reason
-        top_skills = [s for s in (profile.get("skills") or []) if s.lower() in (job.get("description") or "").lower()]
-        job["reason"] = f"Strong match on {', '.join(top_skills[:3])}" if top_skills else "Good title alignment"
+        top_skills = [s for s in (profile.get("skills") or [])
+                      if s.lower() in (job.get("description") or "").lower()]
+        job["reason"] = (f"Strong match on {', '.join(top_skills[:3])}"
+                         if top_skills else "Good title alignment")
 
-    # 4. Sort by composite score descending
+    # 5. Sort by composite score
     routed.sort(key=lambda j: j["job_score"], reverse=True)
 
-    # 5. Assign ranks
+    # 6. Assign ranks
     for i, job in enumerate(routed):
         job["rank"] = i + 1
+
+    # 7. ATS match on top 30 (after ranking to control GPT cost)
+    if resume_text:
+        for job in routed[:30]:
+            try:
+                ats = compute_ats_match(resume_text, job.get("description", ""))
+                job.update(ats)
+            except Exception as e:
+                print(f"[rank_jobs] ATS failed for '{job.get('title')}': {e}")
+                job.update({"ats_score": 0, "ats_keywords": [], "ats_missing": []})
 
     return routed
