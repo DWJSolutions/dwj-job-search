@@ -1,5 +1,7 @@
 """
-Resume Parser — uses OpenAI GPT-4o to extract structured profile from PDF/DOCX
+Resume Parser - uses OpenAI GPT-4o to extract structured profile from PDF/DOCX.
+Phase 2: also stores resume_text in the profile so rank-jobs can use it
+for embedding-based matching and ATS keyword checking.
 """
 
 import os
@@ -18,15 +20,16 @@ Return ONLY valid JSON with exactly these fields:
   "education": "<highest degree, e.g. Bachelors, Masters, Associates, High School>",
   "industries": ["list of industries the person has worked in"]
 }
-Be thorough with skills — include tools, software, methodologies, and domain knowledge.
+Be thorough with skills - include tools, software, methodologies, and domain knowledge.
 """
+
 
 def extract_text_from_pdf(content: bytes) -> str:
     try:
-        import fitz  # PyMuPDF
-        doc  = fitz.open(stream=content, filetype="pdf")
+        import fitz
+        doc = fitz.open(stream=content, filetype="pdf")
         text = "\n".join(page.get_text() for page in doc)
-        return text[:8000]  # trim to token budget
+        return text[:8000]
     except ImportError:
         raise RuntimeError("PyMuPDF not installed. Run: pip install pymupdf")
 
@@ -34,7 +37,7 @@ def extract_text_from_pdf(content: bytes) -> str:
 def extract_text_from_docx(content: bytes) -> str:
     try:
         from docx import Document
-        doc  = Document(io.BytesIO(content))
+        doc = Document(io.BytesIO(content))
         text = "\n".join(p.text for p in doc.paragraphs)
         return text[:8000]
     except ImportError:
@@ -42,7 +45,7 @@ def extract_text_from_docx(content: bytes) -> str:
 
 
 def parse_resume(file_content: bytes, mime_type: str) -> dict:
-    """Parse resume bytes → structured profile dict."""
+    """Parse resume bytes -> structured profile dict (includes resume_text)."""
     if "pdf" in mime_type:
         text = extract_text_from_pdf(file_content)
     else:
@@ -55,7 +58,7 @@ def parse_resume(file_content: bytes, mime_type: str) -> dict:
         model="gpt-4o",
         messages=[
             {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user",   "content": f"Resume text:\n\n{text}"},
+            {"role": "user", "content": f"Resume text:\n\n{text}"},
         ],
         response_format={"type": "json_object"},
         temperature=0.1,
@@ -64,11 +67,14 @@ def parse_resume(file_content: bytes, mime_type: str) -> dict:
     raw = response.choices[0].message.content
     profile = json.loads(raw)
 
-    # Validate and set safe defaults
-    profile.setdefault("skills",           [])
-    profile.setdefault("titles",           [])
+    profile.setdefault("skills", [])
+    profile.setdefault("titles", [])
     profile.setdefault("experience_years", 0)
-    profile.setdefault("education",        "Unknown")
-    profile.setdefault("industries",       [])
+    profile.setdefault("education", "Unknown")
+    profile.setdefault("industries", [])
+
+    # Phase 2: attach raw text for embeddings + ATS matching downstream.
+    # Truncated to 4000 chars - enough for semantic comparison, cheap on tokens.
+    profile["resume_text"] = text[:4000]
 
     return profile
