@@ -6,6 +6,7 @@ const fetchUSAJOBS = require('../services/usajobs');
 const fetchTheMuse = require('../services/themuse');
 const fetchCareerJet = require('../services/careerjet');
 const fetchRemotive = require('../services/remotive');
+const fetchArbeitnow = require('../services/arbeitnow');
 const { normalize } = require('../services/normalizer');
 const { deduplicate } = require('../services/deduplicator');
 const { geocodeLocation } = require('../services/geocoder');
@@ -187,6 +188,8 @@ async function runSearch(req, res, next, mode = 'resume') {
       withTimeout(fetchUSAJOBS(primaryQuery, location), 15000, 'USAJOBS'),
       withTimeout(fetchTheMuse(primaryQuery, location), 15000, 'The Muse'),
       withTimeout(fetchCareerJet(primaryQuery, location), 15000, 'CareerJet'),
+      withTimeout(fetchRemotive(primaryQuery), 15000, 'Remotive'),
+      withTimeout(fetchArbeitnow(primaryQuery), 15000, 'Arbeitnow'),
     ];
 
     const sourceLabels = [
@@ -194,12 +197,9 @@ async function runSearch(req, res, next, mode = 'resume') {
       { label: 'usajobs' },
       { label: 'themuse' },
       { label: 'careerjet' },
+      { label: 'remotive' },
+      { label: 'arbeitnow' },
     ];
-
-    if (include_remote) {
-      sourceRequests.push(withTimeout(fetchRemotive(primaryQuery), 15000, 'Remotive'));
-      sourceLabels.push({ label: 'remotive' });
-    }
 
     const sourceResults = await Promise.allSettled(sourceRequests);
 
@@ -222,8 +222,8 @@ async function runSearch(req, res, next, mode = 'resume') {
     }
     if (sourceStatus.themuse?.startsWith('ok')) sourceStatus.themuse += ' + geocoded/filtered';
     if (sourceStatus.careerjet?.startsWith('ok')) sourceStatus.careerjet += ' + geocoded/filtered';
-    sourceStatus.arbeitnow = 'skipped: global/EU source, no reliable US 30-mile radius filter';
-    if (!include_remote) sourceStatus.remotive = 'skipped: remote jobs not requested';
+    if (sourceStatus.arbeitnow?.startsWith('ok')) sourceStatus.arbeitnow += ' + geocoded/filtered';
+    if (!include_remote) sourceStatus.remote_hybrid = 'filtered out unless remote toggle is on';
     console.info('[search] source results:', sourceStatus);
 
     const raw = settled.filter(({ result }) => result.status === 'fulfilled').flatMap(({ result }) => result.value);
