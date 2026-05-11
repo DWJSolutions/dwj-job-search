@@ -8,6 +8,20 @@ const GAP_STYLES = {
   'nice-to-have': { background: '#E5E7EB', color: '#374151' },
 };
 
+function formatApiError(data, fallback) {
+  if (!data || typeof data !== 'object') return fallback;
+
+  const detail = typeof data.detail === 'string'
+    ? data.detail
+    : Array.isArray(data.detail)
+      ? data.detail.map(item => item.msg || item.message || String(item)).join(' ')
+      : '';
+  const details = typeof data.details === 'string' ? data.details : '';
+  const message = [data.error, detail || details].filter(Boolean).join(': ');
+
+  return message || fallback;
+}
+
 export default function AdminCompare() {
   const [resume, setResume] = useState(null);
   const [jdMode, setJdMode] = useState('text');
@@ -43,7 +57,7 @@ export default function AdminCompare() {
         body: form,
       });
       const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(data.error || 'Comparison failed');
+      if (!response.ok) throw new Error(formatApiError(data, 'Comparison failed'));
       setResult(data.data);
     } catch (err) {
       setError(err.message || 'Comparison failed');

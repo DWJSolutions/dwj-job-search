@@ -1,5 +1,19 @@
 import { useState, useRef } from 'react';
 
+function formatApiError(data, fallback) {
+  if (!data || typeof data !== 'object') return fallback;
+
+  const detail = typeof data.detail === 'string'
+    ? data.detail
+    : Array.isArray(data.detail)
+      ? data.detail.map(item => item.msg || item.message || String(item)).join(' ')
+      : '';
+  const details = typeof data.details === 'string' ? data.details : '';
+  const message = [data.error, detail || details].filter(Boolean).join(': ');
+
+  return message || fallback;
+}
+
 export default function ResumeUpload({ onParsed }) {
   const [file, setFile] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -37,7 +51,7 @@ export default function ResumeUpload({ onParsed }) {
         method: 'POST', body: form,
       });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || 'Parsing failed');
+      if (!res.ok) throw new Error(formatApiError(data, 'Parsing failed'));
       setParsed(data);
       onParsed(data);
     } catch (e) {
