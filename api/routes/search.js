@@ -9,12 +9,48 @@ const { normalize }  = require('../services/normalizer');
 const { deduplicate } = require('../services/deduplicator');
 const { geocodeZip }  = require('../services/geocoder');
 
+function fetchWithTimeout(url, options, timeoutMs = 120000) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+  return fetch(url, { ...options, signal: controller.signal })
+    .finally(() => clearTimeout(timeout));
+}
+
+function withTimeout(promise, timeoutMs, label) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => {
+      setTimeout(() => reject(new Error(`${label} timed out`)), timeoutMs);
+    }),
+  ]);
+}
+
+async function insertSearchSession(db, searchId, zipCode, profile) {
+  try {
+    await db.query(
+      `INSERT INTO searches (id, zip_code, resume_json) VALUES ($1, $2, $3)`,
+      [searchId, zipCode, JSON.stringify(profile)]
+    );
+  } catch (err) {
+    if (err.code !== '42703' || !/resume_json/.test(err.message || '')) throw err;
+
+    await db.query(
+      `INSERT INTO searches (id, zip_code) VALUES ($1, $2)`,
+      [searchId, zipCode]
+    );
+  }
+}
+
 // POST /api/search
 router.post('/search', async (req, res, next) => {
   try {
     const { profile, zip_code, include_remote = false } = req.body;
     if (!profile || !zip_code) {
       return res.status(400).json({ error: 'profile and zip_code are required' });
+    }
+    if (!process.env.PYTHON_SERVICE_URL) {
+      return res.status(503).json({ error: 'AI ranking service is not configured' });
     }
 
     // 1. Geocode ZIP
@@ -27,10 +63,10 @@ router.post('/search', async (req, res, next) => {
 
     // 3. Parallel fetch from all 4 sources
     const [adzunaRes, usaRes, museRes, careerjetRes] = await Promise.allSettled([
-      fetchAdzuna(primaryQuery, location),
-      fetchUSAJOBS(primaryQuery, location),
-      fetchTheMuse(primaryQuery, location),
-      fetchCareerJet(primaryQuery, location),
+      withTimeout(fetchAdzuna(primaryQuery, location), 15000, 'Adzuna'),
+      withTimeout(fetchUSAJOBS(primaryQuery, location), 15000, 'USAJOBS'),
+      withTimeout(fetchTheMuse(primaryQuery, location), 15000, 'The Muse'),
+      withTimeout(fetchCareerJet(primaryQuery, location), 15000, 'CareerJet'),
     ]);
 
     const raw = [adzunaRes, usaRes, museRes, careerjetRes]
@@ -48,7 +84,7 @@ router.post('/search', async (req, res, next) => {
     }
 
     // 6. Send to Python AI for salary estimation, gap analysis & ranking
-    const aiRes = await fetch(`${process.env.PYTHON_SERVICE_URL}/rank-jobs`, {
+    const aiRes = await fetchWithTimeout(`${process.env.PYTHON_SERVICE_URL}/rank-jobs`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -60,17 +96,21 @@ router.post('/search', async (req, res, next) => {
       }),
     });
 
-    if (!aiRes.ok) throw new Error('Ranking service failed');
+    if (!aiRes.ok) {
+      const details = await aiRes.text();
+      return res.status(502).json({
+        error: 'AI ranking service failed',
+        details: details.slice(0, 500),
+      });
+    }
+
     const { ranked } = await aiRes.json();
     const top30 = ranked.slice(0, 30);
 
     // 7. Persist search session
     const search_id = uuid();
     const db = req.app.locals.db;
-    await db.query(
-      `INSERT INTO searches (id, zip_code, resume_json) VALUES ($1, $2, $3)`,
-      [search_id, zip_code, JSON.stringify(profile)]
-    );
+    await insertSearchSession(db, search_id, zip_code, profile);
 
     // Cache jobs
     for (const job of top30) {
@@ -93,6 +133,11 @@ router.post('/search', async (req, res, next) => {
 
     res.json({ search_id, count: top30.length });
   } catch (err) {
+    if (err.name === 'AbortError') {
+      return res.status(504).json({
+        error: 'AI ranking service timed out while waking up. Please try again in a minute.',
+      });
+    }
     next(err);
   }
 });

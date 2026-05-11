@@ -31,11 +31,13 @@ export default function Home() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ profile: parsed, zip_code: zip, include_remote: includeRemote }),
       });
-      if (!res.ok) throw new Error('Search failed');
-      const { search_id } = await res.json();
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'Search failed');
+      if (!data.search_id) throw new Error(data.message || 'No jobs found for this search.');
+      const { search_id } = data;
       router.push(`/results?sid=${search_id}`);
     } catch (e) {
-      setError('Search failed. Please check your connection and try again.');
+      setError(e.message || 'Search failed. Please check your connection and try again.');
       setLoading(false);
     }
   };
