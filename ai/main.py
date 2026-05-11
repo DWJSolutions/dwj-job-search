@@ -1,6 +1,6 @@
 """
-DWJ Job Search — Python AI Service (FastAPI)
-Handles: resume parsing, salary estimation, job ranking, gap analysis
+DWJ Job Search - Python AI Service (FastAPI) v2.0
+Handles: resume parsing, salary estimation, job ranking, gap analysis, ATS matching
 """
 
 import os
@@ -10,10 +10,10 @@ from pydantic import BaseModel
 from typing import List, Optional
 
 from parse_resume import parse_resume
-from rank_jobs    import rank_jobs
+from rank_jobs import rank_jobs
 from gap_analysis import analyze_gaps
 
-app = FastAPI(title="DWJ AI Service", version="1.0.0")
+app = FastAPI(title="DWJ AI Service", version="2.0.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -22,41 +22,46 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ─── Models ───────────────────────────────────────────────────────────────────
 
 class Profile(BaseModel):
-    skills:           List[str] = []
-    titles:           List[str] = []
-    experience_years: int       = 0
-    education:        str       = ""
-    industries:       List[str] = []
+    skills: List[str] = []
+    titles: List[str] = []
+    experience_years: int = 0
+    education: str = ""
+    industries: List[str] = []
+    resume_text: str = ""   # Phase 2: raw text for embeddings + ATS matching
+
 
 class RankRequest(BaseModel):
-    jobs:           List[dict]
-    profile:        dict
-    user_lat:       float
-    user_lon:       float
+    jobs: List[dict]
+    profile: dict           # accepts full profile dict including resume_text
+    user_lat: float
+    user_lon: float
     include_remote: bool = False
+
 
 class GapRequest(BaseModel):
     profile: dict
-    job:     dict
+    job: dict
 
-# ─── Routes ───────────────────────────────────────────────────────────────────
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "service": "DWJ AI"}
+    return {"status": "ok", "service": "DWJ AI", "version": "2.0.0"}
 
 
 @app.post("/parse-resume")
 async def parse_resume_endpoint(resume: UploadFile = File(...)):
-    """Parse an uploaded resume file and return structured profile."""
-    allowed = ["application/pdf",
-               "application/vnd.openxmlformats-officedocument.wordprocessingml.document"]
+    """
+    Parse an uploaded resume file and return structured profile.
+    Phase 2: response includes resume_text for downstream embedding + ATS use.
+    """
+    allowed = [
+        "application/pdf",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ]
     if resume.content_type not in allowed:
         raise HTTPException(400, "Unsupported file type. Send PDF or DOCX.")
-
     content = await resume.read()
     try:
         profile = parse_resume(content, resume.content_type)
@@ -69,25 +74,28 @@ async def parse_resume_endpoint(resume: UploadFile = File(...)):
 async def rank_jobs_endpoint(req: RankRequest):
     """
     Receive normalized jobs + user profile + location.
-    Returns top 30 ranked jobs with salary estimates and match scores.
+    Phase 2 fields added per job (top 30):
+      match_score, salary_signal, skills_signal, title_signal, growth_signal,
+      badge, ats_score, ats_keywords, ats_missing, gap_skills, salary_confidence
     """
     try:
         ranked = rank_jobs(
-            jobs           = req.jobs,
-            profile        = req.profile,
-            user_lat       = req.user_lat,
-            user_lon       = req.user_lon,
-            include_remote = req.include_remote,
+            jobs=req.jobs,
+            profile=req.profile,
+            user_lat=req.user_lat,
+            user_lon=req.user_lon,
+            include_remote=req.include_remote,
         )
 
-        # Run gap analysis on top 10 only (cost control)
+        # Gap analysis on top 10 only (each is one GPT call - cost control)
         for job in ranked[:10]:
             try:
                 gaps = analyze_gaps(req.profile, job)
                 job["gap_skills"]     = gaps.get("gap_skills", [])
                 job["matched_skills"] = gaps.get("matched_skills", [])
                 job["gap_summary"]    = gaps.get("gap_summary", "")
-            except:
+            except Exception as e:
+                print(f"[main] gap analysis failed for '{job.get('title')}': {e}")
                 job["gap_skills"] = []
 
         return {"ranked": ranked[:30]}
