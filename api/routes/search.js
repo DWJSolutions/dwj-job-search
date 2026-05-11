@@ -1,24 +1,23 @@
 const router = require('express').Router();
 const fetch = require('node-fetch');
 const { v4: uuid } = require('uuid');
-const fetchAdzuna     = require('../services/adzuna');
-const fetchUSAJOBS    = require('../services/usajobs');
-const fetchTheMuse    = require('../services/themuse');
-const fetchCareerJet  = require('../services/careerjet');
-const fetchRemotive   = require('../services/remotive');   // free, no key
-const fetchArbeitnow  = require('../services/arbeitnow');  // free, no key
-const { normalize }   = require('../services/normalizer');
+const fetchAdzuna = require('../services/adzuna');
+const fetchUSAJOBS = require('../services/usajobs');
+const fetchTheMuse = require('../services/themuse');
+const fetchCareerJet = require('../services/careerjet');
+const fetchRemotive = require('../services/remotive'); // free, no key
+const fetchArbeitnow = require('../services/arbeitnow'); // free, no key
+const { normalize } = require('../services/normalizer');
 const { deduplicate } = require('../services/deduplicator');
-const { geocodeZip }  = require('../services/geocoder');
+const { geocodeZip } = require('../services/geocoder');
 
-// All active sources — name shown in UI source badge row
 const SOURCES = [
-  { name: 'adzuna',     label: 'Adzuna'    },
-  { name: 'usajobs',    label: 'USAJOBS'   },
-  { name: 'themuse',    label: 'The Muse'  },
-  { name: 'careerjet',  label: 'CareerJet' },
-  { name: 'remotive',   label: 'Remotive'  },
-  { name: 'arbeitnow',  label: 'Arbeitnow' },
+  { name: 'adzuna',    label: 'Adzuna'    },
+  { name: 'usajobs',   label: 'USAJOBS'   },
+  { name: 'themuse',   label: 'The Muse'  },
+  { name: 'careerjet', label: 'CareerJet' },
+  { name: 'remotive',  label: 'Remotive'  },
+  { name: 'arbeitnow', label: 'Arbeitnow' },
 ];
 
 function fetchWithTimeout(url, options, timeoutMs = 120000) {
@@ -32,23 +31,31 @@ function withTimeout(promise, timeoutMs, label) {
   return Promise.race([
     promise,
     new Promise((_, reject) => {
-      setTimeout(() => reject(new Error(`${label} timed out`)), timeoutMs);
+      setTimeout(() => reject(new Error(label + ' timed out')), timeoutMs);
     }),
   ]);
+}
+
+let _migrated = false;
+async function ensureAiDataColumn(db) {
+  if (_migrated) return;
+  try {
+    await db.query('ALTER TABLE search_results ADD COLUMN IF NOT EXISTS ai_data TEXT');
+  } catch (e) {
+    try { await db.query('ALTER TABLE search_results ADD COLUMN ai_data TEXT'); } catch (_) {}
+  }
+  _migrated = true;
 }
 
 async function insertSearchSession(db, searchId, zipCode, profile) {
   try {
     await db.query(
-      `INSERT INTO searches (id, zip_code, resume_json) VALUES ($1, $2, $3)`,
+      'INSERT INTO searches (id, zip_code, resume_json) VALUES ($1, $2, $3)',
       [searchId, zipCode, JSON.stringify(profile)]
     );
   } catch (err) {
     if (err.code !== '42703' || !/resume_json/.test(err.message || '')) throw err;
-    await db.query(
-      `INSERT INTO searches (id, zip_code) VALUES ($1, $2)`,
-      [searchId, zipCode]
-    );
+    await db.query('INSERT INTO searches (id, zip_code) VALUES ($1, $2)', [searchId, zipCode]);
   }
 }
 
@@ -59,18 +66,11 @@ async function upsertJobCache(db, job) {
        salary_min, salary_max, salary_est, salary_conf, description, url, posted_at)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
      ON CONFLICT (source, external_id) DO UPDATE SET
-       title        = EXCLUDED.title,
-       company      = EXCLUDED.company,
-       location     = EXCLUDED.location,
-       lat          = EXCLUDED.lat,
-       lng          = EXCLUDED.lng,
-       salary_min   = EXCLUDED.salary_min,
-       salary_max   = EXCLUDED.salary_max,
-       salary_est   = EXCLUDED.salary_est,
-       salary_conf  = EXCLUDED.salary_conf,
-       description  = EXCLUDED.description,
-       url          = EXCLUDED.url,
-       posted_at    = EXCLUDED.posted_at
+       title=EXCLUDED.title, company=EXCLUDED.company, location=EXCLUDED.location,
+       lat=EXCLUDED.lat, lng=EXCLUDED.lng, salary_min=EXCLUDED.salary_min,
+       salary_max=EXCLUDED.salary_max, salary_est=EXCLUDED.salary_est,
+       salary_conf=EXCLUDED.salary_conf, description=EXCLUDED.description,
+       url=EXCLUDED.url, posted_at=EXCLUDED.posted_at
      RETURNING id`,
     [
       job.id, job.source, job.external_id, job.title, job.company, job.location,
@@ -81,35 +81,17 @@ async function upsertJobCache(db, job) {
   return result.rows[0].id;
 }
 
-// POST /api/search
 router.post('/search', async (req, res, next) => {
   try {
     const { profile, zip_code, include_remote = false } = req.body;
-    if (!profile || !zip_code) {
-      return res.status(400).json({ error: 'profile and zip_code are required' });
-    }
-    if (!process.env.PYTHON_SERVICE_URL) {
-      return res.status(503).json({ error: 'AI ranking service is not configured' });
-    }
+    if (!profile || !zip_code) return res.status(400).json({ error: 'profile and zip_code are required' });
+    if (!process.env.PYTHON_SERVICE_URL) return res.status(503).json({ error: 'AI ranking service is not configured' });
 
-    // 1. Geocode ZIP
     const { lat, lon, city, state } = await geocodeZip(zip_code);
-    const location = `${city}, ${state}`;
-
-    // 2. Build search query from resume
+    const location = city + ', ' + state;
     const primaryQuery = profile.titles?.[0] || profile.skills?.[0] || 'analyst';
 
-    // 3. Parallel fetch from all 6 sources
-    //    Remotive & Arbeitnow are global/remote boards — no location param needed.
-    //    The Python ranker handles distance scoring for remote jobs.
-    const [
-      adzunaRes,
-      usaRes,
-      museRes,
-      careerjetRes,
-      remotiveRes,
-      arbeitnowRes,
-    ] = await Promise.allSettled([
+    const [adzunaRes, usaRes, museRes, careerjetRes, remotiveRes, arbeitnowRes] = await Promise.allSettled([
       withTimeout(fetchAdzuna(primaryQuery, location),    15000, 'Adzuna'),
       withTimeout(fetchUSAJOBS(primaryQuery, location),   15000, 'USAJOBS'),
       withTimeout(fetchTheMuse(primaryQuery, location),   15000, 'The Muse'),
@@ -127,118 +109,85 @@ router.post('/search', async (req, res, next) => {
       { label: 'arbeitnow', result: arbeitnowRes },
     ];
 
-    // Log which sources succeeded/failed
     const sourceStatus = {};
     for (const { label, result } of settled) {
-      if (result.status === 'fulfilled') {
-        sourceStatus[label] = `ok (${result.value.length})`;
-      } else {
-        sourceStatus[label] = `error: ${result.reason?.message || 'unknown'}`;
-        console.warn(`[search] ${label} failed:`, result.reason?.message);
-      }
+      if (result.status === 'fulfilled') sourceStatus[label] = 'ok (' + result.value.length + ')';
+      else { sourceStatus[label] = 'error: ' + (result.reason?.message || 'unknown'); console.warn('[search] ' + label + ' failed:', result.reason?.message); }
     }
     console.info('[search] source results:', sourceStatus);
 
-    const raw = settled
-      .filter(({ result }) => result.status === 'fulfilled')
-      .flatMap(({ result }) => result.value);
-
-    // 4. Normalize → deduplicate
+    const raw = settled.filter(({ result }) => result.status === 'fulfilled').flatMap(({ result }) => result.value);
     const normalized = raw.map(j => normalize(j));
     const unique = deduplicate(normalized);
 
-    if (unique.length === 0) {
-      return res.status(200).json({
-        search_id: null,
-        count: 0,
-        sources: sourceStatus,
-        message: 'No jobs found from any source',
-      });
-    }
+    if (unique.length === 0) return res.status(200).json({ search_id: null, count: 0, sources: sourceStatus, message: 'No jobs found from any source' });
 
-    // 5. Send to Python AI for salary estimation, gap analysis & ranking
-    const aiRes = await fetchWithTimeout(`${process.env.PYTHON_SERVICE_URL}/rank-jobs`, {
+    const aiRes = await fetchWithTimeout(process.env.PYTHON_SERVICE_URL + '/rank-jobs', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        jobs: unique,
-        profile,
-        user_lat: lat,
-        user_lon: lon,
-        include_remote,
-      }),
+      body: JSON.stringify({ jobs: unique, profile, user_lat: lat, user_lon: lon, include_remote }),
     });
 
     if (!aiRes.ok) {
       const details = await aiRes.text();
-      return res.status(502).json({
-        error: 'AI ranking service failed',
-        details: details.slice(0, 500),
-      });
+      return res.status(502).json({ error: 'AI parsing service failed', details: details.slice(0, 500) });
     }
 
     const { ranked } = await aiRes.json();
     const top30 = ranked.slice(0, 30);
-
-    // 6. Persist search session + cache jobs
     const search_id = uuid();
     const db = req.app.locals.db;
+
     await insertSearchSession(db, search_id, zip_code, profile);
+    await ensureAiDataColumn(db);
 
     for (const job of top30) {
       const cachedJobId = await upsertJobCache(db, job);
+      const aiData = JSON.stringify({
+        salary_signal: job.salary_signal ?? null, skills_signal: job.skills_signal ?? null,
+        title_signal: job.title_signal ?? null,   growth_signal: job.growth_signal ?? null,
+        badge: job.badge || null,
+        ats_score: job.ats_score ?? null, ats_keywords: job.ats_keywords || [], ats_missing: job.ats_missing || [],
+        gap_skills: job.gap_skills || [], matched_skills: job.matched_skills || [],
+        gap_summary: job.gap_summary || '', reason: job.reason || '',
+      });
       await db.query(
-        `INSERT INTO search_results (search_id, job_id, rank, match_score)
-         VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING`,
-        [search_id, cachedJobId, job.rank, job.match_score]
+        'INSERT INTO search_results (search_id, job_id, rank, match_score, ai_data) VALUES ($1, $2, $3, $4, $5) ON CONFLICT DO NOTHING',
+        [search_id, cachedJobId, job.rank, job.match_score, aiData]
       );
     }
 
-    res.json({
-      search_id,
-      count: top30.length,
-      sources: sourceStatus,
-    });
+    res.json({ search_id, count: top30.length, sources: sourceStatus });
   } catch (err) {
-    if (err.name === 'AbortError') {
-      return res.status(504).json({
-        error: 'AI ranking service timed out while waking up. Please try again in a minute.',
-      });
-    }
+    if (err.name === 'AbortError') return res.status(504).json({ error: 'AI ranking service timed out while waking up. Please try again in a minute.' });
     next(err);
   }
 });
 
-// GET /api/results/:sid
 router.get('/results/:sid', async (req, res, next) => {
   try {
     const { sid } = req.params;
     const db = req.app.locals.db;
-
     const searchRow = await db.query('SELECT * FROM searches WHERE id=$1', [sid]);
     if (!searchRow.rows.length) return res.status(404).json({ error: 'Search not found' });
 
     const jobsResult = await db.query(
-      `SELECT jc.*, sr.rank, sr.match_score
-       FROM search_results sr
-       JOIN job_cache jc ON jc.id = sr.job_id
-       WHERE sr.search_id = $1
-       ORDER BY sr.rank ASC`,
+      'SELECT jc.*, sr.rank, sr.match_score, sr.ai_data FROM search_results sr JOIN job_cache jc ON jc.id = sr.job_id WHERE sr.search_id = $1 ORDER BY sr.rank ASC',
       [sid]
     );
 
-    res.json({
-      meta: {
-        zip_code:      searchRow.rows[0].zip_code,
-        total_fetched: jobsResult.rows.length,
-        created_at:    searchRow.rows[0].created_at,
-        sources:       SOURCES,
-      },
-      jobs: jobsResult.rows,
+    const jobs = jobsResult.rows.map(row => {
+      let aiData = {};
+      try { aiData = typeof row.ai_data === 'string' ? JSON.parse(row.ai_data) : (row.ai_data || {}); } catch (_) {}
+      const { ai_data, ...rest } = row;
+      return { ...rest, ...aiData };
     });
-  } catch (err) {
-    next(err);
-  }
+
+    res.json({
+      meta: { zip_code: searchRow.rows[0].zip_code, total_fetched: jobs.length, created_at: searchRow.rows[0].created_at, sources: SOURCES },
+      jobs,
+    });
+  } catch (err) { next(err); }
 });
 
 module.exports = router;
