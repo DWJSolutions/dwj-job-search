@@ -6,7 +6,7 @@ const fetchUSAJOBS = require('../services/usajobs');
 const fetchRemotive = require('../services/remotive');
 const { normalize } = require('../services/normalizer');
 const { deduplicate } = require('../services/deduplicator');
-const { geocodeZip } = require('../services/geocoder');
+const { geocodeLocation } = require('../services/geocoder');
 
 const SOURCES = [
   { name: 'adzuna', label: 'Adzuna' },
@@ -122,17 +122,18 @@ async function upsertJobCache(db, job) {
 async function runSearch(req, res, next, mode = 'resume') {
   try {
     const { zip_code, include_remote = false, job_title } = req.body;
+    const locationInput = String(zip_code || '').trim();
     const profile = buildSearchProfile(req.body);
 
-    if (!zip_code || (!profile && !job_title)) {
-      return res.status(400).json({ error: 'zip_code and search input are required' });
+    if (!locationInput || (!profile && !job_title)) {
+      return res.status(400).json({ error: 'Location and search input are required' });
     }
     if (!process.env.PYTHON_SERVICE_URL) {
       return res.status(503).json({ error: 'AI ranking service is not configured' });
     }
 
-    const { lat, lon, city, state } = await geocodeZip(zip_code);
-    const location = city + ', ' + state;
+    const { lat, lon, city, state, label } = await geocodeLocation(locationInput);
+    const location = state ? city + ', ' + state : city;
     const queries = [...(profile.titles || []), ...(profile.skills || []).slice(0, 3)];
     const primaryQuery = job_title || profile.search_query || profile.titles?.[0] || queries[0] || 'analyst';
 
@@ -200,7 +201,7 @@ async function runSearch(req, res, next, mode = 'resume') {
     const search_id = uuid();
     const db = req.app.locals.db;
 
-    await insertSearchSession(db, search_id, zip_code, profile);
+    await insertSearchSession(db, search_id, label || locationInput, profile);
     await ensureAiDataColumn(db);
 
     for (const job of top30) {
@@ -210,6 +211,9 @@ async function runSearch(req, res, next, mode = 'resume') {
 
     res.json({ search_id, count: top30.length, mode, sources: sourceStatus });
   } catch (err) {
+    if (err.code === 'LOCATION_NOT_FOUND') {
+      return res.status(400).json({ error: err.message });
+    }
     if (err.name === 'AbortError') {
       return res.status(504).json({ error: 'AI ranking service timed out while waking up. Please try again in a minute.' });
     }
