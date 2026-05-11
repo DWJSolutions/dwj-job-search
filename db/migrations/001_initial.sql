@@ -52,6 +52,7 @@ CREATE TABLE IF NOT EXISTS search_results (
   job_id      UUID NOT NULL REFERENCES job_cache(id) ON DELETE CASCADE,
   rank        INTEGER,
   match_score FLOAT,
+  result_json JSONB,
   PRIMARY KEY (search_id, job_id)
 );
 CREATE INDEX idx_results_search ON search_results(search_id);

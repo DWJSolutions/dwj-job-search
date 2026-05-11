@@ -169,6 +169,19 @@ export default function AdminDashboard() {
               </p>
             </div>
           </Link>
+
+          <Link href="/admin/compare">
+            <div
+              className="p-6 rounded-2xl cursor-pointer hover:shadow-lg transition-all"
+              style={{ background: '#1A2F4E', border: '1px solid rgba(0,201,167,0.2)' }}
+            >
+              <div className="text-4xl mb-3">🧾</div>
+              <h3 className="text-lg font-bold text-white mb-2">Resume vs JD Compare</h3>
+              <p className="text-gray-400 text-sm">
+                Compare a resume against a job description for ATS keywords, gaps, and recommendations
+              </p>
+            </div>
+          </Link>
         </div>
 
         {/* Quick Stats */}

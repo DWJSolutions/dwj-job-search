@@ -5,18 +5,18 @@ const fetchAdzuna = require('../services/adzuna');
 const fetchUSAJOBS = require('../services/usajobs');
 const fetchTheMuse = require('../services/themuse');
 const fetchCareerJet = require('../services/careerjet');
-const fetchRemotive = require('../services/remotive'); // free, no key
-const fetchArbeitnow = require('../services/arbeitnow'); // free, no key
+const fetchRemotive = require('../services/remotive');
+const fetchArbeitnow = require('../services/arbeitnow');
 const { normalize } = require('../services/normalizer');
 const { deduplicate } = require('../services/deduplicator');
 const { geocodeZip } = require('../services/geocoder');
 
 const SOURCES = [
-  { name: 'adzuna',    label: 'Adzuna'    },
-  { name: 'usajobs',   label: 'USAJOBS'   },
-  { name: 'themuse',   label: 'The Muse'  },
+  { name: 'adzuna', label: 'Adzuna' },
+  { name: 'usajobs', label: 'USAJOBS' },
+  { name: 'themuse', label: 'The Muse' },
   { name: 'careerjet', label: 'CareerJet' },
-  { name: 'remotive',  label: 'Remotive'  },
+  { name: 'remotive', label: 'Remotive' },
   { name: 'arbeitnow', label: 'Arbeitnow' },
 ];
 
@@ -59,6 +59,47 @@ async function insertSearchSession(db, searchId, zipCode, profile) {
   }
 }
 
+function buildSearchProfile({ profile, job_title }) {
+  if (profile) return profile;
+  const title = (job_title || '').trim();
+  return {
+    titles: title ? [title] : [],
+    skills: title ? title.split(/\s+/).filter(Boolean) : [],
+    experience_years: 0,
+    education: '',
+    industries: [],
+    search_query: title,
+  };
+}
+
+function collectAiData(job) {
+  return {
+    salary_signal: job.salary_signal ?? null,
+    skills_signal: job.skills_signal ?? null,
+    title_signal: job.title_signal ?? null,
+    growth_signal: job.growth_signal ?? null,
+    growth_score: job.growth_score ?? null,
+    badge: job.badge || job.match_action || null,
+    match_action: job.match_action || job.badge || null,
+    ats_score: job.ats_score ?? null,
+    ats_keywords: job.ats_keywords || job.ats_matched || [],
+    ats_missing: job.ats_missing || [],
+    gap_skills: job.gap_skills || [],
+    matched_skills: job.matched_skills || [],
+    gap_summary: job.gap_summary || '',
+    reason: job.reason || '',
+    salary_confidence: job.salary_confidence || job.salary_conf || 'unknown',
+  };
+}
+
+async function insertSearchResult(db, searchId, cachedJobId, job) {
+  const aiData = JSON.stringify(collectAiData(job));
+  await db.query(
+    'INSERT INTO search_results (search_id, job_id, rank, match_score, ai_data) VALUES ($1, $2, $3, $4, $5) ON CONFLICT DO NOTHING',
+    [searchId, cachedJobId, job.rank, job.match_score, aiData]
+  );
+}
+
 async function upsertJobCache(db, job) {
   const result = await db.query(
     `INSERT INTO job_cache
@@ -81,38 +122,49 @@ async function upsertJobCache(db, job) {
   return result.rows[0].id;
 }
 
-router.post('/search', async (req, res, next) => {
+async function runSearch(req, res, next, mode = 'resume') {
   try {
-    const { profile, zip_code, include_remote = false } = req.body;
-    if (!profile || !zip_code) return res.status(400).json({ error: 'profile and zip_code are required' });
-    if (!process.env.PYTHON_SERVICE_URL) return res.status(503).json({ error: 'AI ranking service is not configured' });
+    const { zip_code, include_remote = false, job_title } = req.body;
+    const profile = buildSearchProfile(req.body);
+
+    if (!zip_code || (!profile && !job_title)) {
+      return res.status(400).json({ error: 'zip_code and search input are required' });
+    }
+    if (!process.env.PYTHON_SERVICE_URL) {
+      return res.status(503).json({ error: 'AI ranking service is not configured' });
+    }
 
     const { lat, lon, city, state } = await geocodeZip(zip_code);
     const location = city + ', ' + state;
-    const primaryQuery = profile.titles?.[0] || profile.skills?.[0] || 'analyst';
+    const queries = [...(profile.titles || []), ...(profile.skills || []).slice(0, 3)];
+    const primaryQuery = job_title || profile.search_query || profile.titles?.[0] || queries[0] || 'analyst';
 
     const [adzunaRes, usaRes, museRes, careerjetRes, remotiveRes, arbeitnowRes] = await Promise.allSettled([
-      withTimeout(fetchAdzuna(primaryQuery, location),    15000, 'Adzuna'),
-      withTimeout(fetchUSAJOBS(primaryQuery, location),   15000, 'USAJOBS'),
-      withTimeout(fetchTheMuse(primaryQuery, location),   15000, 'The Muse'),
+      withTimeout(fetchAdzuna(primaryQuery, location), 15000, 'Adzuna'),
+      withTimeout(fetchUSAJOBS(primaryQuery, location), 15000, 'USAJOBS'),
+      withTimeout(fetchTheMuse(primaryQuery, location), 15000, 'The Muse'),
       withTimeout(fetchCareerJet(primaryQuery, location), 15000, 'CareerJet'),
-      withTimeout(fetchRemotive(primaryQuery),            15000, 'Remotive'),
-      withTimeout(fetchArbeitnow(primaryQuery),           15000, 'Arbeitnow'),
+      withTimeout(fetchRemotive(primaryQuery), 15000, 'Remotive'),
+      withTimeout(fetchArbeitnow(primaryQuery), 15000, 'Arbeitnow'),
     ]);
 
     const settled = [
-      { label: 'adzuna',    result: adzunaRes    },
-      { label: 'usajobs',   result: usaRes       },
-      { label: 'themuse',   result: museRes      },
+      { label: 'adzuna', result: adzunaRes },
+      { label: 'usajobs', result: usaRes },
+      { label: 'themuse', result: museRes },
       { label: 'careerjet', result: careerjetRes },
-      { label: 'remotive',  result: remotiveRes  },
+      { label: 'remotive', result: remotiveRes },
       { label: 'arbeitnow', result: arbeitnowRes },
     ];
 
     const sourceStatus = {};
     for (const { label, result } of settled) {
-      if (result.status === 'fulfilled') sourceStatus[label] = 'ok (' + result.value.length + ')';
-      else { sourceStatus[label] = 'error: ' + (result.reason?.message || 'unknown'); console.warn('[search] ' + label + ' failed:', result.reason?.message); }
+      if (result.status === 'fulfilled') {
+        sourceStatus[label] = 'ok (' + result.value.length + ')';
+      } else {
+        sourceStatus[label] = 'error: ' + (result.reason?.message || 'unknown');
+        console.warn('[search] ' + label + ' failed:', result.reason?.message);
+      }
     }
     console.info('[search] source results:', sourceStatus);
 
@@ -120,7 +172,9 @@ router.post('/search', async (req, res, next) => {
     const normalized = raw.map(j => normalize(j));
     const unique = deduplicate(normalized);
 
-    if (unique.length === 0) return res.status(200).json({ search_id: null, count: 0, sources: sourceStatus, message: 'No jobs found from any source' });
+    if (unique.length === 0) {
+      return res.status(200).json({ search_id: null, count: 0, sources: sourceStatus, message: 'No jobs found from any source' });
+    }
 
     const aiRes = await fetchWithTimeout(process.env.PYTHON_SERVICE_URL + '/rank-jobs', {
       method: 'POST',
@@ -130,7 +184,7 @@ router.post('/search', async (req, res, next) => {
 
     if (!aiRes.ok) {
       const details = await aiRes.text();
-      return res.status(502).json({ error: 'AI parsing service failed', details: details.slice(0, 500) });
+      return res.status(502).json({ error: 'AI ranking service failed', details: details.slice(0, 500) });
     }
 
     const { ranked } = await aiRes.json();
@@ -143,25 +197,24 @@ router.post('/search', async (req, res, next) => {
 
     for (const job of top30) {
       const cachedJobId = await upsertJobCache(db, job);
-      const aiData = JSON.stringify({
-        salary_signal: job.salary_signal ?? null, skills_signal: job.skills_signal ?? null,
-        title_signal: job.title_signal ?? null,   growth_signal: job.growth_signal ?? null,
-        badge: job.badge || null,
-        ats_score: job.ats_score ?? null, ats_keywords: job.ats_keywords || [], ats_missing: job.ats_missing || [],
-        gap_skills: job.gap_skills || [], matched_skills: job.matched_skills || [],
-        gap_summary: job.gap_summary || '', reason: job.reason || '',
-      });
-      await db.query(
-        'INSERT INTO search_results (search_id, job_id, rank, match_score, ai_data) VALUES ($1, $2, $3, $4, $5) ON CONFLICT DO NOTHING',
-        [search_id, cachedJobId, job.rank, job.match_score, aiData]
-      );
+      await insertSearchResult(db, search_id, cachedJobId, job);
     }
 
-    res.json({ search_id, count: top30.length, sources: sourceStatus });
+    res.json({ search_id, count: top30.length, mode, sources: sourceStatus });
   } catch (err) {
-    if (err.name === 'AbortError') return res.status(504).json({ error: 'AI ranking service timed out while waking up. Please try again in a minute.' });
+    if (err.name === 'AbortError') {
+      return res.status(504).json({ error: 'AI ranking service timed out while waking up. Please try again in a minute.' });
+    }
     next(err);
   }
+}
+
+router.post('/search', async (req, res, next) => {
+  return runSearch(req, res, next, 'resume');
+});
+
+router.post('/search-jobtitle', async (req, res, next) => {
+  return runSearch(req, res, next, 'jobTitle');
 });
 
 router.get('/results/:sid', async (req, res, next) => {
@@ -184,10 +237,17 @@ router.get('/results/:sid', async (req, res, next) => {
     });
 
     res.json({
-      meta: { zip_code: searchRow.rows[0].zip_code, total_fetched: jobs.length, created_at: searchRow.rows[0].created_at, sources: SOURCES },
+      meta: {
+        zip_code: searchRow.rows[0].zip_code,
+        total_fetched: jobs.length,
+        created_at: searchRow.rows[0].created_at,
+        sources: SOURCES,
+      },
       jobs,
     });
-  } catch (err) { next(err); }
+  } catch (err) {
+    next(err);
+  }
 });
 
 module.exports = router;

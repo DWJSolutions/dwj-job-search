@@ -38,10 +38,22 @@ export default function Results() {
 
   const filtered = useMemo(() => {
     let out = [...jobs];
+    const postedWithin = filters.postedWithin || '60d';
+    const days = Number(postedWithin.replace('d', ''));
     if (filters.minSalary) out = out.filter(j => (j.salary_est || 0) >= filters.minSalary);
     if (filters.sources?.length) out = out.filter(j => filters.sources.includes(j.source));
-    if (filters.confidence?.length) out = out.filter(j => filters.confidence.includes(j.salary_confidence));
+    if (filters.confidence?.length) out = out.filter(j => filters.confidence.includes(j.salary_confidence || j.salary_conf || 'unknown'));
+    if (days) {
+      const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
+      out = out.filter(j => {
+        const posted = j.posted_at || j.posted_date;
+        if (!posted) return true;
+        const time = new Date(posted).getTime();
+        return Number.isNaN(time) || time >= cutoff;
+      });
+    }
     if (sortBy === 'salary') out.sort((a, b) => (b.salary_est || 0) - (a.salary_est || 0));
+    else if (sortBy === 'recent') out.sort((a, b) => new Date(b.posted_at || b.posted_date || 0) - new Date(a.posted_at || a.posted_date || 0));
     else if (sortBy === 'match') out.sort((a, b) => (b.match_score || 0) - (a.match_score || 0));
     else out.sort((a, b) => (a.rank || 99) - (b.rank || 99));
     return out.slice(0, 30);
@@ -57,11 +69,11 @@ export default function Results() {
             style={{ borderColor: '#00C9A7', borderTopColor: 'transparent' }} />
         </div>
         <div className="text-center">
-          <p className="text-white font-bold text-xl">Searching {3} job sources...</p>
+          <p className="text-white font-bold text-xl">Searching job sources...</p>
           <p className="text-gray-400 mt-2">Ranking by salary, match score & growth potential</p>
         </div>
         <div className="flex gap-6 mt-4">
-          {['Adzuna', 'ZipRecruiter', 'USA Jobs'].map(s => (
+          {['Adzuna', 'ZipRecruiter', 'USA Jobs', 'The Muse', 'CareerJet'].map(s => (
             <div key={s} className="flex items-center gap-2 text-gray-400 text-sm">
               <div className="w-2 h-2 rounded-full animate-pulse" style={{ background: '#00C9A7' }} />
               {s}
@@ -107,7 +119,7 @@ export default function Results() {
           {/* Sort */}
           <div className="flex items-center gap-3">
             <span className="text-gray-400 text-sm">Sort by:</span>
-            {['rank', 'salary', 'match'].map(s => (
+            {['rank', 'salary', 'recent', 'match'].map(s => (
               <button
                 key={s}
                 onClick={() => setSortBy(s)}
@@ -117,7 +129,7 @@ export default function Results() {
                   color: sortBy === s ? '#0D1B2A' : '#9CA3AF',
                 }}
               >
-                {s === 'rank' ? '🏆 Top Score' : s === 'salary' ? '💰 Salary' : '🎯 Match'}
+                {s === 'rank' ? '🏆 Top Score' : s === 'salary' ? '💰 Salary' : s === 'recent' ? '🗓 Recent' : '🎯 Match'}
               </button>
             ))}
           </div>
@@ -133,7 +145,7 @@ export default function Results() {
             </span>
           ))}
           <span className="ml-auto text-gray-400 text-xs">
-            {jobs.filter(j => j.salary_confidence === 'estimated').length} salary estimates
+            {jobs.filter(j => (j.salary_confidence || j.salary_conf) === 'estimated').length} salary estimates
           </span>
         </div>
       </div>

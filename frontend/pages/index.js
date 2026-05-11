@@ -12,24 +12,49 @@ const STEPS = [
 
 export default function Home() {
   const router = useRouter();
+  const [mode, setMode] = useState('resume');
   const [parsed, setParsed] = useState(null);
   const [zip, setZip] = useState('32801'); // Orlando default
+  const [jobTitle, setJobTitle] = useState('');
   const [includeRemote, setIncludeRemote] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
+  const validateZip = () => {
+    if (!zip || zip.length !== 5) {
+      setError('Please enter a valid 5-digit ZIP code.');
+      return false;
+    }
+    return true;
+  };
+
   const handleSearch = async (e) => {
     e.preventDefault();
-    if (!parsed) { setError('Please upload your resume first.'); return; }
-    if (!zip || zip.length !== 5) { setError('Please enter a valid 5-digit ZIP code.'); return; }
+    if (mode === 'resume' && !parsed) { setError('Please upload your resume first.'); return; }
+    if (mode === 'jobTitle' && !jobTitle.trim()) { setError('Please enter a job title or keyword.'); return; }
+    if (mode === 'career' && !parsed) { setError('Please upload your resume first.'); return; }
+    if (!validateZip()) return;
+
+    if (mode === 'career') {
+      if (typeof window !== 'undefined') {
+        sessionStorage.setItem('dwj_career_profile', JSON.stringify({ profile: parsed, zip }));
+      }
+      router.push('/career');
+      return;
+    }
+
     setError('');
     setLoading(true);
 
     try {
-      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/search`, {
+      const endpoint = mode === 'jobTitle' ? 'search-jobtitle' : 'search';
+      const body = mode === 'jobTitle'
+        ? { job_title: jobTitle, zip_code: zip, include_remote: includeRemote }
+        : { profile: parsed, zip_code: zip, include_remote: includeRemote };
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/${endpoint}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ profile: parsed, zip_code: zip, include_remote: includeRemote }),
+        body: JSON.stringify(body),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || 'Search failed');
@@ -53,14 +78,14 @@ export default function Home() {
             className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full text-xs font-semibold mb-6"
             style={{ background: 'rgba(0,201,167,0.15)', color: '#00C9A7', border: '1px solid rgba(0,201,167,0.3)' }}
           >
-            🚀 AI-Powered · 3 Job Sources · No Salary Blind Spots
+            🚀 AI-Powered · Multi-Source Search · Salary + Skill Gap Insights
           </div>
           <h1 className="text-5xl font-extrabold text-white leading-tight mb-4">
             Find Your <span style={{ color: '#00C9A7' }}>Highest-Paying</span><br />Job Within 30 Miles
           </h1>
           <p className="text-gray-400 text-xl leading-relaxed">
-            Upload your resume. We search Adzuna, ZipRecruiter, and USAJOBS simultaneously
-            — ranking by real salary, AI match score, and growth potential.
+            Upload your resume, search by title, or explore career paths. We rank roles by salary,
+            AI match signals, location, and growth potential.
             <span style={{ color: '#00C9A7' }}> No job excluded for missing salary.</span>
           </p>
         </div>
@@ -71,13 +96,54 @@ export default function Home() {
         <div className="max-w-2xl mx-auto">
           <div className="rounded-3xl p-8" style={{ background: '#1A2F4E', border: '1px solid rgba(0,201,167,0.2)' }}>
             <form onSubmit={handleSearch} className="space-y-6">
-              {/* Resume Upload */}
-              <div>
-                <label className="block text-sm font-semibold text-gray-300 mb-3">
-                  Step 1 — Upload Your Resume
-                </label>
-                <ResumeUpload onParsed={setParsed} />
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                {[
+                  { key: 'resume', label: 'Resume Search', icon: '📄' },
+                  { key: 'jobTitle', label: 'Job Title Search', icon: '🔍' },
+                  { key: 'career', label: 'Career Paths', icon: '🧭' },
+                ].map(tab => (
+                  <button
+                    key={tab.key}
+                    type="button"
+                    onClick={() => { setMode(tab.key); setError(''); }}
+                    className="px-3 py-3 rounded-xl text-sm font-semibold transition-all"
+                    style={{
+                      background: mode === tab.key ? '#00C9A7' : '#0D1B2A',
+                      color: mode === tab.key ? '#0D1B2A' : '#D1D5DB',
+                      border: '1px solid rgba(0,201,167,0.3)',
+                    }}
+                  >
+                    <span className="mr-1">{tab.icon}</span>{tab.label}
+                  </button>
+                ))}
               </div>
+
+              {mode === 'jobTitle' ? (
+                <div>
+                  <label className="block text-sm font-semibold text-gray-300 mb-2">
+                    Step 1 — Job Title or Keywords
+                  </label>
+                  <input
+                    type="text"
+                    value={jobTitle}
+                    onChange={e => setJobTitle(e.target.value)}
+                    placeholder="e.g. project manager, data analyst, registered nurse"
+                    className="w-full px-4 py-3 rounded-xl text-white placeholder-gray-500 text-base outline-none focus:ring-2"
+                    style={{
+                      background: '#0D1B2A',
+                      border: '1px solid rgba(0,201,167,0.3)',
+                      '--tw-ring-color': '#00C9A7',
+                    }}
+                  />
+                </div>
+              ) : (
+                <div>
+                  <label className="block text-sm font-semibold text-gray-300 mb-3">
+                    Step 1 — {mode === 'career' ? 'Upload Resume for Career Analysis' : 'Upload Your Resume'}
+                  </label>
+                  <ResumeUpload onParsed={setParsed} />
+                </div>
+              )}
 
               {/* ZIP */}
               <div>
@@ -124,11 +190,11 @@ export default function Home() {
               {/* Submit */}
               <button
                 type="submit"
-                disabled={loading || !parsed}
+                disabled={loading || (mode !== 'jobTitle' && !parsed) || (mode === 'jobTitle' && !jobTitle.trim())}
                 className="w-full py-4 rounded-xl text-base font-bold transition-all disabled:opacity-50 disabled:cursor-not-allowed"
                 style={{
-                  background: loading || !parsed ? '#374151' : '#00C9A7',
-                  color: loading || !parsed ? '#9CA3AF' : '#0D1B2A',
+                  background: loading || (mode !== 'jobTitle' && !parsed) || (mode === 'jobTitle' && !jobTitle.trim()) ? '#374151' : '#00C9A7',
+                  color: loading || (mode !== 'jobTitle' && !parsed) || (mode === 'jobTitle' && !jobTitle.trim()) ? '#9CA3AF' : '#0D1B2A',
                 }}
               >
                 {loading ? (
@@ -136,6 +202,10 @@ export default function Home() {
                     <span className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin" />
                     Searching jobs...
                   </span>
+                ) : mode === 'career' ? (
+                  parsed ? '🧭 Analyze Career Paths' : 'Upload resume to analyze'
+                ) : mode === 'jobTitle' ? (
+                  jobTitle.trim() ? '🔍 Search Jobs by Title' : 'Enter a job title to search'
                 ) : !parsed ? (
                   'Upload resume to search'
                 ) : (
@@ -172,7 +242,7 @@ export default function Home() {
       <section className="py-12 px-4" style={{ background: '#00C9A7' }}>
         <div className="max-w-4xl mx-auto grid grid-cols-3 gap-8 text-center">
           {[
-            { num: '3', label: 'Job Sources' },
+            { num: '4+', label: 'Job Sources' },
             { num: '30', label: 'Top Matches' },
             { num: '100%', label: 'No Salary Exclusions' },
           ].map(s => (

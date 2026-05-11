@@ -1,5 +1,5 @@
 export default function FilterSidebar({ filters, onChange, counts }) {
-  const sources = ['adzuna', 'ziprecruiter', 'usajobs'];
+  const sources = Object.keys(counts || {}).length ? Object.keys(counts) : ['adzuna', 'ziprecruiter', 'usajobs', 'themuse', 'careerjet'];
   const jobTypes = ['Full-time', 'Part-time', 'Contract', 'Remote'];
 
   const toggle = (key, val) => {
@@ -48,7 +48,7 @@ export default function FilterSidebar({ filters, onChange, counts }) {
                 className="rounded"
                 style={{ accentColor: '#00C9A7' }}
               />
-              <span className="text-sm text-gray-700 capitalize">{s === 'usajobs' ? 'USA Jobs' : s === 'ziprecruiter' ? 'ZipRecruiter' : 'Adzuna'}</span>
+              <span className="text-sm text-gray-700 capitalize">{formatSource(s)}</span>
               {counts?.[s] && (
                 <span className="ml-auto text-xs text-gray-400">{counts[s]}</span>
               )}
@@ -95,6 +95,26 @@ export default function FilterSidebar({ filters, onChange, counts }) {
           ))}
         </div>
 
+        <div className="mb-5">
+          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Posted</p>
+          {[
+            { val: '7d', label: 'Last 7 days' },
+            { val: '30d', label: 'Last 30 days' },
+            { val: '60d', label: 'Last 60 days' },
+          ].map(option => (
+            <label key={option.val} className="flex items-center gap-2 mb-2 cursor-pointer">
+              <input
+                type="radio"
+                name="postedWithin"
+                checked={(filters.postedWithin || '60d') === option.val}
+                onChange={() => onChange({ ...filters, postedWithin: option.val })}
+                style={{ accentColor: '#00C9A7' }}
+              />
+              <span className="text-sm text-gray-700">{option.label}</span>
+            </label>
+          ))}
+        </div>
+
         {/* Reset */}
         <button
           onClick={() => onChange({})}
@@ -106,4 +126,15 @@ export default function FilterSidebar({ filters, onChange, counts }) {
       </div>
     </aside>
   );
+}
+
+function formatSource(source) {
+  const labels = {
+    adzuna: 'Adzuna',
+    ziprecruiter: 'ZipRecruiter',
+    usajobs: 'USA Jobs',
+    themuse: 'The Muse',
+    careerjet: 'CareerJet',
+  };
+  return labels[source] || source;
 }

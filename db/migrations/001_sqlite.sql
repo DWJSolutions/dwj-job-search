@@ -43,6 +43,7 @@ CREATE TABLE IF NOT EXISTS search_results (
   job_id      TEXT NOT NULL,
   rank        INTEGER,
   match_score REAL,
+  result_json TEXT,
   PRIMARY KEY (search_id, job_id)
 );
 
