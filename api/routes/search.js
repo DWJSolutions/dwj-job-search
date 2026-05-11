@@ -3,10 +3,7 @@ const fetch = require('node-fetch');
 const { v4: uuid } = require('uuid');
 const fetchAdzuna = require('../services/adzuna');
 const fetchUSAJOBS = require('../services/usajobs');
-const fetchTheMuse = require('../services/themuse');
-const fetchCareerJet = require('../services/careerjet');
 const fetchRemotive = require('../services/remotive');
-const fetchArbeitnow = require('../services/arbeitnow');
 const { normalize } = require('../services/normalizer');
 const { deduplicate } = require('../services/deduplicator');
 const { geocodeZip } = require('../services/geocoder');
@@ -139,25 +136,32 @@ async function runSearch(req, res, next, mode = 'resume') {
     const queries = [...(profile.titles || []), ...(profile.skills || []).slice(0, 3)];
     const primaryQuery = job_title || profile.search_query || profile.titles?.[0] || queries[0] || 'analyst';
 
-    const [adzunaRes, usaRes, museRes, careerjetRes, remotiveRes, arbeitnowRes] = await Promise.allSettled([
+    const sourceRequests = [
       withTimeout(fetchAdzuna(primaryQuery, location), 15000, 'Adzuna'),
       withTimeout(fetchUSAJOBS(primaryQuery, location), 15000, 'USAJOBS'),
-      withTimeout(fetchTheMuse(primaryQuery, location), 15000, 'The Muse'),
-      withTimeout(fetchCareerJet(primaryQuery, location), 15000, 'CareerJet'),
-      withTimeout(fetchRemotive(primaryQuery), 15000, 'Remotive'),
-      withTimeout(fetchArbeitnow(primaryQuery), 15000, 'Arbeitnow'),
-    ]);
-
-    const settled = [
-      { label: 'adzuna', result: adzunaRes },
-      { label: 'usajobs', result: usaRes },
-      { label: 'themuse', result: museRes },
-      { label: 'careerjet', result: careerjetRes },
-      { label: 'remotive', result: remotiveRes },
-      { label: 'arbeitnow', result: arbeitnowRes },
     ];
 
+    const sourceLabels = [
+      { label: 'adzuna' },
+      { label: 'usajobs' },
+    ];
+
+    if (include_remote) {
+      sourceRequests.push(withTimeout(fetchRemotive(primaryQuery), 15000, 'Remotive'));
+      sourceLabels.push({ label: 'remotive' });
+    }
+
+    const sourceResults = await Promise.allSettled(sourceRequests);
+
+    const settled = sourceResults.map((result, idx) => ({
+      label: sourceLabels[idx].label,
+      result,
+    }));
+
     const sourceStatus = {};
+    sourceStatus.scope = include_remote
+      ? 'US jobs within 30 miles plus remote/hybrid jobs'
+      : 'US jobs within 30 miles only';
     for (const { label, result } of settled) {
       if (result.status === 'fulfilled') {
         sourceStatus[label] = 'ok (' + result.value.length + ')';
@@ -166,6 +170,10 @@ async function runSearch(req, res, next, mode = 'resume') {
         console.warn('[search] ' + label + ' failed:', result.reason?.message);
       }
     }
+    sourceStatus.themuse = 'skipped: no reliable 30-mile US radius filter';
+    sourceStatus.careerjet = 'skipped: no reliable 30-mile US radius filter';
+    sourceStatus.arbeitnow = 'skipped: global/EU source, no reliable US 30-mile radius filter';
+    if (!include_remote) sourceStatus.remotive = 'skipped: remote jobs not requested';
     console.info('[search] source results:', sourceStatus);
 
     const raw = settled.filter(({ result }) => result.status === 'fulfilled').flatMap(({ result }) => result.value);

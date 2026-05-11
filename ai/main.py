@@ -87,8 +87,8 @@ async def rank_jobs_endpoint(req: RankRequest):
             include_remote=req.include_remote,
         )
 
-        # Gap analysis on top 10 only (each is one GPT call - cost control)
-        for job in ranked[:10]:
+        # Gap analysis on top 5 only (each is one GPT call - keeps search responsive)
+        for job in ranked[:5]:
             try:
                 gaps = analyze_gaps(req.profile, job)
                 job["gap_skills"]     = gaps.get("gap_skills", [])

@@ -85,10 +85,19 @@ def _badge(match_score: int) -> str:
     return "long-term"
 
 
+def _is_remote_or_hybrid(job: dict) -> bool:
+    text = " ".join([
+        job.get("location") or "",
+        job.get("title") or "",
+        (job.get("description") or "")[:300],
+    ]).lower()
+    return "remote" in text or "hybrid" in text
+
+
 def _route_job(job: dict, user_lat: float, user_lon: float,
                include_remote: bool):
-    is_remote = "remote" in (job.get("location") or "").lower()
-    if is_remote:
+    is_flexible = _is_remote_or_hybrid(job)
+    if is_flexible:
         if include_remote:
             job["distance_miles"] = None
             job["loc_score"] = 0.5
@@ -104,9 +113,10 @@ def _route_job(job: dict, user_lat: float, user_lon: float,
             return job
         return None
 
-    job["distance_miles"] = None
-    job["loc_score"] = 0.5
-    return job
+    # Local search results must have coordinates so we can prove they are
+    # within the requested 30-mile radius. Sources without coordinates are
+    # intentionally excluded instead of being treated as approximate matches.
+    return None
 
 
 def rank_jobs(jobs: list, profile: dict, user_lat: float, user_lon: float,
@@ -169,9 +179,9 @@ def rank_jobs(jobs: list, profile: dict, user_lat: float, user_lon: float,
     for i, job in enumerate(routed):
         job["rank"] = i + 1
 
-    # 7. ATS match on top 30 (after ranking to control GPT cost)
+    # 7. ATS match on top 10 (after ranking to keep search responsive)
     if resume_text:
-        for job in routed[:30]:
+        for job in routed[:10]:
             try:
                 ats = compute_ats_match(resume_text, job.get("description", ""))
                 job.update(ats)
