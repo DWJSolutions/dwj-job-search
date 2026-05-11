@@ -3,6 +3,8 @@ const fetch = require('node-fetch');
 const { v4: uuid } = require('uuid');
 const fetchAdzuna = require('../services/adzuna');
 const fetchUSAJOBS = require('../services/usajobs');
+const fetchTheMuse = require('../services/themuse');
+const fetchCareerJet = require('../services/careerjet');
 const fetchRemotive = require('../services/remotive');
 const { normalize } = require('../services/normalizer');
 const { deduplicate } = require('../services/deduplicator');
@@ -67,6 +69,47 @@ function buildSearchProfile({ profile, job_title }) {
     industries: [],
     search_query: title,
   };
+}
+
+function isRemoteOrHybrid(job) {
+  const text = [job.location, job.title, (job.description || '').slice(0, 300)]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
+  return text.includes('remote') || text.includes('hybrid');
+}
+
+function looksLikeUsLocation(location) {
+  const loc = String(location || '').toLowerCase();
+  return /,\s*[a-z]{2}\b/i.test(location || '')
+    || /\bflorida|orlando|kissimmee|tampa|miami|jacksonville|atlanta|new york|chicago|dallas|houston|los angeles|seattle|denver|charlotte\b/.test(loc);
+}
+
+const geocodeCache = new Map();
+async function geocodeJobLocation(job) {
+  if (job.lat && job.lng) return job;
+  if (isRemoteOrHybrid(job)) return job;
+  if (!looksLikeUsLocation(job.location)) return job;
+
+  const key = String(job.location || '').trim().toLowerCase();
+  if (!key) return job;
+
+  try {
+    if (!geocodeCache.has(key)) {
+      geocodeCache.set(key, await geocodeLocation(job.location));
+    }
+    const geo = geocodeCache.get(key);
+    job.lat = geo.lat;
+    job.lng = geo.lon;
+  } catch (_) {
+    // Keep the job un-geocoded; the ranker will exclude it from local-only results.
+  }
+  return job;
+}
+
+async function geocodeSourceJobs(jobs) {
+  const limited = jobs.slice(0, 75);
+  return Promise.all(limited.map(geocodeJobLocation));
 }
 
 function collectAiData(job) {
@@ -142,11 +185,15 @@ async function runSearch(req, res, next, mode = 'resume') {
     const sourceRequests = [
       withTimeout(fetchAdzuna(primaryQuery, location), 15000, 'Adzuna'),
       withTimeout(fetchUSAJOBS(primaryQuery, location), 15000, 'USAJOBS'),
+      withTimeout(fetchTheMuse(primaryQuery, location), 15000, 'The Muse'),
+      withTimeout(fetchCareerJet(primaryQuery, location), 15000, 'CareerJet'),
     ];
 
     const sourceLabels = [
       { label: 'adzuna' },
       { label: 'usajobs' },
+      { label: 'themuse' },
+      { label: 'careerjet' },
     ];
 
     if (include_remote) {
@@ -173,14 +220,15 @@ async function runSearch(req, res, next, mode = 'resume') {
         console.warn('[search] ' + label + ' failed:', result.reason?.message);
       }
     }
-    sourceStatus.themuse = 'skipped: no reliable 30-mile US radius filter';
-    sourceStatus.careerjet = 'skipped: no reliable 30-mile US radius filter';
+    if (sourceStatus.themuse?.startsWith('ok')) sourceStatus.themuse += ' + geocoded/filtered';
+    if (sourceStatus.careerjet?.startsWith('ok')) sourceStatus.careerjet += ' + geocoded/filtered';
     sourceStatus.arbeitnow = 'skipped: global/EU source, no reliable US 30-mile radius filter';
     if (!include_remote) sourceStatus.remotive = 'skipped: remote jobs not requested';
     console.info('[search] source results:', sourceStatus);
 
     const raw = settled.filter(({ result }) => result.status === 'fulfilled').flatMap(({ result }) => result.value);
-    const normalized = raw.map(j => normalize(j));
+    const geocodedRaw = await geocodeSourceJobs(raw);
+    const normalized = geocodedRaw.map(j => normalize(j));
     const unique = deduplicate(normalized);
 
     if (unique.length === 0) {
