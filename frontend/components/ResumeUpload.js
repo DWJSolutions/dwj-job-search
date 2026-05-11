@@ -4,6 +4,7 @@ export default function ResumeUpload({ onParsed }) {
   const [file, setFile] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [statusMessage, setStatusMessage] = useState('');
   const [parsed, setParsed] = useState(null);
   const [dragging, setDragging] = useState(false);
   const inputRef = useRef();
@@ -22,7 +23,12 @@ export default function ResumeUpload({ onParsed }) {
     }
     setFile(f);
     setError('');
+    setStatusMessage('Uploading your resume...');
     setLoading(true);
+    const timers = [
+      setTimeout(() => setStatusMessage('Waking up the AI parser. This can take about a minute on the first upload.'), 8000),
+      setTimeout(() => setStatusMessage('Still parsing. Thanks for hanging tight.'), 35000),
+    ];
 
     try {
       const form = new FormData();
@@ -30,13 +36,15 @@ export default function ResumeUpload({ onParsed }) {
       const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/parse-resume`, {
         method: 'POST', body: form,
       });
-      if (!res.ok) throw new Error('Parsing failed');
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'Parsing failed');
       setParsed(data);
       onParsed(data);
     } catch (e) {
-      setError('Could not parse resume. Please try again.');
+      setError(e.message || 'Could not parse resume. Please try again.');
     } finally {
+      timers.forEach(clearTimeout);
+      setStatusMessage('');
       setLoading(false);
     }
   };
@@ -70,7 +78,7 @@ export default function ResumeUpload({ onParsed }) {
           <div className="flex flex-col items-center gap-3">
             <div className="w-12 h-12 border-4 border-mint-500 border-t-transparent rounded-full animate-spin"
               style={{ borderColor: '#00C9A7', borderTopColor: 'transparent' }} />
-            <p className="text-gray-300 font-medium">Parsing your resume with AI...</p>
+            <p className="text-gray-300 font-medium">{statusMessage || 'Parsing your resume with AI...'}</p>
           </div>
         ) : file && parsed ? (
           <div className="flex flex-col items-center gap-2">
