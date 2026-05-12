@@ -88,6 +88,16 @@ function isRemoteOrHybrid(job) {
   return text.includes('remote') || text.includes('hybrid');
 }
 
+function isMultiLocation(job) {
+  const loc = String(job.location || '').toLowerCase();
+  if (!loc) return false;
+  if (/\b(nationwide|various|multiple locations|many locations|all locations|across the us|across the united states|united states|usa|u\.s\.|anywhere)\b/i.test(loc)) {
+    return true;
+  }
+  const locationSeparators = (loc.match(/[;|]/g) || []).length;
+  return locationSeparators >= 2;
+}
+
 function looksLikeUsLocation(location) {
   const loc = String(location || '').toLowerCase();
   return /,\s*[a-z]{2}\b/i.test(location || '')
@@ -118,6 +128,17 @@ async function geocodeJobLocation(job) {
 
 async function geocodeSourceJobs(jobs) {
   return Promise.all(jobs.map(geocodeJobLocation));
+}
+
+function scopeJob(job, includeRemote) {
+  job.is_remote = isRemoteOrHybrid(job);
+  job.is_multi_location = isMultiLocation(job);
+  job.location_confidence = job.lat && job.lng ? 'exact' : 'unknown';
+
+  if (!includeRemote && (job.is_remote || job.is_multi_location)) {
+    return null;
+  }
+  return job;
 }
 
 function collectAiData(job) {
@@ -184,6 +205,9 @@ async function runSearch(req, res, next, mode = 'resume') {
     if (!process.env.PYTHON_SERVICE_URL) {
       return res.status(503).json({ error: 'AI ranking service is not configured' });
     }
+    if (!/^\d{5}$/.test(locationInput)) {
+      return res.status(400).json({ error: 'Please enter a valid 5-digit ZIP code.' });
+    }
 
     const { lat, lon, city, state, label } = await geocodeLocation(locationInput);
     const location = state ? city + ', ' + state : city;
@@ -235,7 +259,8 @@ async function runSearch(req, res, next, mode = 'resume') {
 
     const raw = settled.filter(({ result }) => result.status === 'fulfilled').flatMap(({ result }) => result.value);
     const geocodedRaw = await geocodeSourceJobs(raw);
-    const normalized = geocodedRaw.map(j => normalize(j));
+    const scopedRaw = geocodedRaw.map(j => scopeJob(j, include_remote)).filter(Boolean);
+    const normalized = scopedRaw.map(j => normalize(j));
     const unique = deduplicate(normalized);
 
     if (unique.length === 0) {

@@ -24,25 +24,34 @@ function locationError(message) {
 
 /**
  * Convert a US ZIP code or city/state string to lat/lon.
- * ZIPs use Zippopotam.us. City/state searches use Nominatim constrained to the US.
+ * ZIPs use Zippopotam.us and are cached in-process for 30 days.
+ * City/state support remains for internal compatibility.
  */
+const zipCache = new Map();
+const ZIP_CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+
 async function geocodeLocation(input) {
   const query = String(input || '').trim();
-  if (!query) throw locationError('Please enter a city name or ZIP code.');
+  if (!query) throw locationError('Please enter a valid 5-digit ZIP code.');
 
   if (/^\d{5}$/.test(query)) {
+    const cached = zipCache.get(query);
+    if (cached && Date.now() - cached.cachedAt < ZIP_CACHE_TTL_MS) return cached.value;
+
     const res = await fetch(`https://api.zippopotam.us/us/${query}`);
-    if (!res.ok) throw locationError('ZIP code was not found. Try a US ZIP code or city, state.');
+    if (!res.ok) throw locationError('ZIP code was not found. Try a valid US ZIP code.');
     const data = await res.json();
     const place = data.places?.[0];
-    if (!place) throw locationError('ZIP code was not found. Try a US ZIP code or city, state.');
-    return {
+    if (!place) throw locationError('ZIP code was not found. Try a valid US ZIP code.');
+    const value = {
       lat: parseFloat(place.latitude),
       lon: parseFloat(place.longitude),
       city: place['place name'],
       state: place['state abbreviation'],
       label: `${place['place name']}, ${place['state abbreviation']}`,
     };
+    zipCache.set(query, { value, cachedAt: Date.now() });
+    return value;
   }
 
   const params = new URLSearchParams({

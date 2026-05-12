@@ -21,6 +21,9 @@ function normalize(raw) {
     description:      (raw.description || '').slice(0, 2000),
     url:              raw.url || '',
     posted_at:        raw.posted_at ? new Date(raw.posted_at).toISOString() : null,
+    is_remote:        !!raw.is_remote,
+    is_multi_location: !!raw.is_multi_location,
+    location_confidence: raw.location_confidence || null,
     match_score:      null,   // filled by ranker
     job_score:        null,   // filled by ranker
     reason:           null,   // filled by AI

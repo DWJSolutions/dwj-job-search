@@ -103,8 +103,27 @@ def _is_remote_or_hybrid(job: dict) -> bool:
     return "remote" in text or "hybrid" in text
 
 
+def _is_multi_location(job: dict) -> bool:
+    loc = (job.get("location") or "").lower()
+    markers = [
+        "nationwide",
+        "various",
+        "multiple locations",
+        "many locations",
+        "all locations",
+        "across the us",
+        "across the united states",
+        "united states",
+        "anywhere",
+    ]
+    return any(marker in loc for marker in markers) or loc.count(";") >= 2 or loc.count("|") >= 2
+
+
 def _route_job(job: dict, user_lat: float, user_lon: float,
                include_remote: bool):
+    if not include_remote and (job.get("is_multi_location") or _is_multi_location(job)):
+        return None
+
     is_flexible = _is_remote_or_hybrid(job)
     if is_flexible:
         if include_remote:

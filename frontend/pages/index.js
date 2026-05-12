@@ -5,7 +5,7 @@ import ResumeUpload from '../components/ResumeUpload';
 
 const STEPS = [
   { icon: '📄', title: 'Upload Resume', desc: 'AI parses your skills, titles, and experience in seconds.' },
-  { icon: '📍', title: 'Enter City or ZIP', desc: 'We find jobs within 30 miles — or include remote roles.' },
+  { icon: '📍', title: 'Enter ZIP Code', desc: 'We find jobs within 30 miles — or include remote roles.' },
   { icon: '🤖', title: 'AI Ranks Jobs', desc: 'Salary, match score, and growth potential — all weighted.' },
   { icon: '🎯', title: 'Apply with Confidence', desc: 'See your skill gaps before you hit apply.' },
 ];
@@ -21,13 +21,8 @@ export default function Home() {
   const [error, setError] = useState('');
 
   const validateZip = () => {
-    const location = zip.trim();
-    if (!location || location.length < 2) {
-      setError('Please enter a city name or ZIP code.');
-      return false;
-    }
-    if (/^\d+$/.test(location) && !/^\d{5}$/.test(location)) {
-      setError('Please enter a valid 5-digit ZIP code, or use a city name.');
+    if (!/^\d{5}$/.test(zip.trim())) {
+      setError('Please enter a valid 5-digit ZIP code.');
       return false;
     }
     return true;
@@ -188,25 +183,25 @@ export default function Home() {
                 </div>
               )}
 
-              {/* Location */}
+              {/* ZIP */}
               <div>
                 <label className="block text-sm font-semibold text-gray-300 mb-2">
-                  Step 2 — City or ZIP Code
+                  Step 2 — ZIP Code
                 </label>
                 <input
                   type="text"
                   value={zip}
-                  onChange={e => setZip(e.target.value.slice(0, 80))}
-                  placeholder="e.g. 32801 or Orlando, FL"
-                  maxLength={80}
-                  className="w-full px-4 py-3 rounded-xl text-white placeholder-gray-500 text-base outline-none focus:ring-2"
+                  onChange={e => setZip(e.target.value.replace(/\D/g, '').slice(0, 5))}
+                  placeholder="e.g. 32801"
+                  maxLength={5}
+                  className="w-full px-4 py-3 rounded-xl text-white placeholder-gray-500 text-lg font-mono outline-none focus:ring-2"
                   style={{
                     background: '#0D1B2A',
                     border: '1px solid rgba(0,201,167,0.3)',
                     '--tw-ring-color': '#00C9A7',
                   }}
                 />
-                <p className="text-gray-500 text-xs mt-1.5">Jobs within 30 miles of this city or ZIP code</p>
+                <p className="text-gray-500 text-xs mt-1.5">Jobs within 30 miles of this ZIP code</p>
               </div>
 
               {/* Remote toggle */}
