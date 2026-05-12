@@ -10,11 +10,48 @@ New in Phase 2:
 """
 
 import math
+import re
 from salary_est import resolve_salary
 from embeddings import compute_semantic_scores
 from ats_match import compute_ats_match
 
 SALARY_CAP = 250_000
+
+DOMAIN_RULES = {
+    "technology": {
+        "query": [
+            "software", "technical", "technology", "tech", "it", "saas",
+            "digital", "application", "systems", "platform", "cloud",
+            "data", "cyber", "devops", "engineering", "product",
+        ],
+        "positive": [
+            "software", "technical", "technology", "tech", "it", "saas",
+            "digital", "application", "systems", "platform", "cloud",
+            "data", "cyber", "devops", "engineering", "product",
+            "agile", "scrum", "jira", "api", "developer", "infrastructure",
+        ],
+        "negative": [
+            "construction", "civil", "site", "superintendent", "estimator",
+            "electrical contractor", "plumbing", "hvac", "roofing",
+            "real estate", "multifamily", "commercial construction",
+        ],
+    },
+    "construction": {
+        "query": [
+            "construction", "civil", "site", "superintendent", "estimator",
+            "contractor", "hvac", "plumbing", "roofing",
+        ],
+        "positive": [
+            "construction", "civil", "site", "superintendent", "estimator",
+            "contractor", "subcontractor", "blueprint", "hvac", "plumbing",
+            "roofing", "building", "commercial construction",
+        ],
+        "negative": [
+            "software", "saas", "cloud", "api", "developer", "devops",
+            "cyber", "data platform", "application",
+        ],
+    },
+}
 
 
 def normalize_salary(amt: float) -> float:
@@ -51,6 +88,67 @@ def _title_signal(profile_titles: list, job_title: str) -> int:
         overlap = len(t_words & job_words) / max(len(t_words | job_words), 1)
         best = max(best, overlap)
     return round(best * 100)
+
+
+def _words(text: str) -> set:
+    return set(re.findall(r"[a-z0-9]+", (text or "").lower()))
+
+
+def _contains_any(text: str, terms: list) -> bool:
+    haystack = (text or "").lower()
+    haystack_words = _words(haystack)
+    for term in terms:
+        if " " in term:
+            if term in haystack:
+                return True
+        elif term in haystack_words:
+            return True
+    return False
+
+
+def _profile_text(profile: dict) -> str:
+    parts = [
+        profile.get("search_query") or "",
+        " ".join(profile.get("titles") or []),
+        " ".join(profile.get("skills") or []),
+        " ".join(profile.get("industries") or []),
+    ]
+    return " ".join(parts).lower()
+
+
+def _matches_search_intent(job: dict, profile: dict) -> bool:
+    intent_text = _profile_text(profile)
+    title_text = " ".join(profile.get("titles") or [])
+    query_words = _words(title_text or profile.get("search_query") or "")
+
+    job_title = (job.get("title") or "").lower()
+    job_text = " ".join([
+        job.get("title") or "",
+        job.get("company") or "",
+        (job.get("description") or "")[:1200],
+    ]).lower()
+
+    meaningful_query_words = {
+        w for w in query_words
+        if len(w) > 2 and w not in {"and", "the", "for", "with", "job", "jobs"}
+    }
+    if meaningful_query_words:
+        title_overlap = meaningful_query_words & _words(job_title)
+        role_words = meaningful_query_words & {"project", "program", "product", "manager", "analyst", "engineer", "developer", "director"}
+        if role_words and not role_words.issubset(_words(job_title)):
+            return False
+        if not title_overlap and not any(w in job_text for w in meaningful_query_words):
+            return False
+
+    for rule in DOMAIN_RULES.values():
+        if not _contains_any(intent_text, rule["query"]):
+            continue
+        if _contains_any(job_text, rule["negative"]) and not _contains_any(job_text, rule["positive"]):
+            return False
+        if not _contains_any(job_text, rule["positive"]):
+            return False
+
+    return True
 
 
 SENIOR_KW = ["senior", "lead", "principal", "director", "vp", "manager",
@@ -158,6 +256,7 @@ def rank_jobs(jobs: list, profile: dict, user_lat: float, user_lon: float,
 
     # 2. Filter by location
     routed = [j for j in (_route_job(j, user_lat, user_lon, include_remote) for j in jobs) if j]
+    routed = [j for j in routed if _matches_search_intent(j, profile)]
     if not routed:
         return []
 

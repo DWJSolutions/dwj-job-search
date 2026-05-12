@@ -98,6 +98,20 @@ function isMultiLocation(job) {
   return locationSeparators >= 2;
 }
 
+function locationMentionsTarget(job, target) {
+  const loc = String(job.location || '').toLowerCase();
+  if (!loc || !target) return false;
+  const city = String(target.city || '').toLowerCase();
+  const state = String(target.state || '').toLowerCase();
+  const label = String(target.label || '').toLowerCase();
+
+  return Boolean(
+    (city && loc.includes(city)) ||
+    (state && new RegExp('(^|[^a-z])' + state.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '([^a-z]|$)', 'i').test(loc)) ||
+    (label && loc.includes(label))
+  );
+}
+
 function looksLikeUsLocation(location) {
   const loc = String(location || '').toLowerCase();
   return /,\s*[a-z]{2}\b/i.test(location || '')
@@ -130,12 +144,15 @@ async function geocodeSourceJobs(jobs) {
   return Promise.all(jobs.map(geocodeJobLocation));
 }
 
-function scopeJob(job, includeRemote) {
+function scopeJob(job, includeRemote, targetLocation) {
   job.is_remote = isRemoteOrHybrid(job);
   job.is_multi_location = isMultiLocation(job);
   job.location_confidence = job.lat && job.lng ? 'exact' : 'unknown';
 
   if (!includeRemote && (job.is_remote || job.is_multi_location)) {
+    return null;
+  }
+  if (!includeRemote && !job.lat && !job.lng && !locationMentionsTarget(job, targetLocation)) {
     return null;
   }
   return job;
@@ -259,7 +276,9 @@ async function runSearch(req, res, next, mode = 'resume') {
 
     const raw = settled.filter(({ result }) => result.status === 'fulfilled').flatMap(({ result }) => result.value);
     const geocodedRaw = await geocodeSourceJobs(raw);
-    const scopedRaw = geocodedRaw.map(j => scopeJob(j, include_remote)).filter(Boolean);
+    const scopedRaw = geocodedRaw
+      .map(j => scopeJob(j, include_remote, { city, state, label }))
+      .filter(Boolean);
     const normalized = scopedRaw.map(j => normalize(j));
     const unique = deduplicate(normalized);
 
