@@ -259,7 +259,7 @@ async function runSearch(req, res, next, mode = 'resume') {
     const search_id = uuid();
     const db = req.app.locals.db;
 
-    await insertSearchSession(db, search_id, label || locationInput, profile);
+    await insertSearchSession(db, search_id, locationInput, profile);
     await ensureAiDataColumn(db);
 
     for (const job of top30) {
