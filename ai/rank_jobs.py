@@ -122,10 +122,11 @@ def _route_job(job: dict, user_lat: float, user_lon: float,
             return job
         return None
 
-    # Local search results must have coordinates so we can prove they are
-    # within the requested 30-mile radius. Sources without coordinates are
-    # intentionally excluded instead of being treated as approximate matches.
-    return None
+    # Some sources do not provide dependable coordinates. Keep non-flexible
+    # jobs as candidates with unknown distance instead of excluding the source.
+    job["distance_miles"] = None
+    job["loc_score"] = 0.35
+    return job
 
 
 def rank_jobs(jobs: list, profile: dict, user_lat: float, user_lon: float,

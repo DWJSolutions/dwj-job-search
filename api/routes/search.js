@@ -111,14 +111,13 @@ async function geocodeJobLocation(job) {
     job.lat = geo.lat;
     job.lng = geo.lon;
   } catch (_) {
-    // Keep the job un-geocoded; the ranker will exclude it from local-only results.
+    // Keep the job un-geocoded; the ranker can still include it as unknown distance.
   }
   return job;
 }
 
 async function geocodeSourceJobs(jobs) {
-  const limited = jobs.slice(0, 75);
-  return Promise.all(limited.map(geocodeJobLocation));
+  return Promise.all(jobs.map(geocodeJobLocation));
 }
 
 function collectAiData(job) {
