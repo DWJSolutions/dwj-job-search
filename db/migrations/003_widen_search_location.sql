@@ -1,0 +1,2 @@
+ALTER TABLE searches
+  ALTER COLUMN zip_code TYPE VARCHAR(255);

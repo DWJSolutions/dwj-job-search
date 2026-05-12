@@ -54,6 +54,14 @@ async function insertSearchSession(db, searchId, zipCode, profile) {
       [searchId, zipCode, JSON.stringify(profile)]
     );
   } catch (err) {
+    if (err.code === '22001' && /zip_code|character varying\(10\)/i.test(err.message || '')) {
+      await db.query('ALTER TABLE searches ALTER COLUMN zip_code TYPE VARCHAR(255)');
+      await db.query(
+        'INSERT INTO searches (id, zip_code, resume_json) VALUES ($1, $2, $3)',
+        [searchId, zipCode, JSON.stringify(profile)]
+      );
+      return;
+    }
     if (err.code !== '42703' || !/resume_json/.test(err.message || '')) throw err;
     await db.query('INSERT INTO searches (id, zip_code) VALUES ($1, $2)', [searchId, zipCode]);
   }
